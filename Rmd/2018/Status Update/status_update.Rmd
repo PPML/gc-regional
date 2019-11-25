@@ -1,0 +1,1101 @@
+---
+title: Status Report on gcRegional
+---
+
+In this report I'll outline a status update on the following aspects
+of the project. 
+
+- Model Structure
+- Optimization
+- Calibration
+- Intervention Analysis
+
+## Model Structure and Optimization
+
+Because optimization has been difficult, we have been trying to make 
+the posterior distribution easier to optimize. 
+
+To this end, we have tried many things: 
+
+- Fixing Parameters to Medians from the National Model
+- Using Logistic Curves instead of Bezier Curves for screening
+- Forcing screening to be only increasing
+- Scaling the population denominators for case rates and NHANES data down
+- Setting a more narrow prior on the reporting probability of symptomatic cases
+
+What has been the most successful has been scaling the case rate and NHANES
+population denominators down. The idea goes that the populations behind these numbers
+are so large that the beta distributions used in the likelihood are too sharp, and thus
+the model prioritizes hitting individual data points rather than interpolating the trend. 
+
+Setting a more narrow prior for the probability of reporting symptomatic cases 
+(with a 95% confidence interval [60% to 95%]) has been helpful for informing the 
+reporting probabilities which usually vary across the entire range. However, 
+several demographic groups have reporting probabilities which converge to 
+values outside of this range, and these do not seem to be very strongly affected
+by the change in the prior. I think this is OK, as it helps the otherwise uninformed 
+parameters to find a satisfactory value for optimization while leaving the 
+parameters which seem to be informed by the likelihood function mostly unchanged. 
+
+Optimizing the model has been tricky; this is due to the many parameters which are 
+rather uninformed in the model. These include the reporting symptomatic cases probabilities, 
+the bezier curve control points, and the risk group mixing rates. 
+
+We mention above how the symptomatic reporting probabilities have been altered to 
+try and improve optimization. We have tried changing out the bezier curves for logistic curves,
+and this results in optimization which converges in the units value in both settings. However
+the model fit which optimizations converge to does not interpolate the case rates very well at all,
+often with model case rates greater than the reported case rates across the whole data time-period.
+
+We do not think that the risk mixing parameters should be informed by the national model's estimates.
+
+Given this, we are currently continuing to optimize the model using the scaled down 
+population denominators and fixing 12 natural history parameters to the national model's 
+medians.
+
+## Calibration
+
+Calibration is dependent upon finding optimal values to start the model with. Nonetheless, 
+we have calibrated the model from our best previous optimizations to get temporarily satisfactory
+results. The acceptance rate is not great, but it is sufficient to get a sample of 1000 from the 
+posterior if mcmc is run for long enough (2-4 days, 25 parallel chains). 
+
+## Intervention Analysis
+
+
+I'm interested in investigating the following questions: 
+
+
+What has the effect of screening in the data period been? 
+
+  - How has screening affected different risk groups? 
+  
+  - How many cases have been averted? 
+  
+  - What has the relative reduction in prevalence been? 
+
+  
+  
+How is the burden of disease distributed? 
+
+  - What is the prevalence rate ratio across demographics and sex 
+  in the last data year?
+  
+  - What is the incidence rate ratio across demographics and sex 
+  in the last data year? 
+  
+  - What is the distribution of incident cases during the entire
+  data period across demographics and sex? 
+
+ 
+
+How do the following interventions compare
+
+  - Improvements to Current Interventions
+  
+  - Interventions Targeted on the Elevated Burden Populations
+  
+  - Demographically Targeted Interventions
+  
+  - Universal Screening
+  
+  * In specific, how do they compare in the following metrics: 
+  
+    - Cases Averted
+    
+    - Number of Additional Tests
+    
+    - Relative Reduction in Prevalence
+    
+    - Number Needed to Screen to Avert One Additional Case
+    
+    - Number Needed to Screen to Avert One Case
+  
+
+
+
+We will the following information, in figures and data. 
+
+- Incidence (still needed) and Prevalence (✔)︎, broken into Men and Women, and each Demographic Group
+
+- Relative Rate of Prevalence(✔︎)/Incidence compared to Population Rate for each Demographic Group
+
+- Cases Averted in the Data Period due to Screening (retrospective) (still needed)
+  - The effect of screening in the data period on men, women, and each demographic group.
+
+- Cases Averted, Number of Additional Tests, and Number Needed to Screen to Avert One Case
+  - We will analyze several interventions, focused on removing LTFU, 
+    and increasing screening in those populations with a rate of incidence greater
+    than the population average.
+  - We could also implement the US guidelines... Then we'd have "baseline", and "enhanced,"
+    and we could pretty easily do universal coverage as well. (still needed)
+
+```{r get interventions data, cache = T}
+sf_df <- readRDS("~/Documents/gcRegional/output/10-22-18/interventions_data_SF.rds")
+ba_df <- readRDS("~/Documents/gcRegional/output/10-22-18/interventions_data_BA.rds")
+```
+
+### Prevalence Plots
+
+```{r calculating all population prevalence, cache=T}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year ~ variable + population, value.var = 'value')
+
+summary_df <- group_by(df, site, sim, year) %>% 
+  summarize(
+    prevalence = (
+    symptomatic_cases_Male + symptomatic_cases_Female + 
+      asymptomatic_cases_Male + asymptomatic_cases_Female
+    ) / (population_size_Male + population_size_Female)
+    )
+
+ci_df <- group_by(summary_df, site, year) %>% 
+  summarise(mean = mean(prevalence, na.rm=T),
+            ci_high = quantile(prevalence, 0.975, na.rm = T),
+            ci_low = quantile(prevalence, 0.025, na.rm = T))
+
+library(ggplot2)
+
+# ci_df$interv <- sapply(ci_df$interv, function(str) paste0(strwrap(gsub("_", " ", str), width = 15), collapse='\n'))
+
+ggplot(ci_df, aes(x = year, y = mean, ymax = ci_high, ymin = ci_low)) + 
+  geom_ribbon(size = 0, alpha=0.5) + 
+  geom_line() + 
+  facet_wrap(~site) + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  scale_x_continuous(breaks = seq(min(ci_df$year), max(ci_df$year), by = 4)) + 
+  ylab("Prevalence") + 
+  ggtitle("Prevalence Estimates by Site")
+
+# ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_all_pop.png", height = unit(4, 'in'))
+
+```
+
+```{r calculating prevalence by male/female}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year + population ~ variable, value.var = 'value')
+
+summary_df <- group_by(df, site, sim, population, year) %>% 
+  summarize(
+    prevalence = (symptomatic_cases + asymptomatic_cases) / population_size
+    )
+
+ci_df <- group_by(summary_df, site, population, year) %>% 
+  summarise(
+    mean = mean(prevalence, na.rm=T),
+    ci_high = quantile(prevalence, 0.975, na.rm = T),
+    ci_low = quantile(prevalence, 0.025, na.rm = T)
+    )
+
+ggplot(ci_df, aes(x = year, y = mean, ymax = ci_high, ymin = ci_low, fill = population)) + 
+  geom_ribbon(size = 0, alpha=0.5) + 
+  geom_line(alpha=0.25) + 
+  facet_grid(population~site) + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  scale_x_continuous(breaks = seq(min(ci_df$year), max(ci_df$year), by = 4)) + 
+  ylab("Prevalence") + 
+  ggtitle("Prevalence Estimates by Site by Sex")
+
+# ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_sex.png", height = unit(4, 'in'))
+```
+
+```{r calculating prevalence by demographic}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Black', 'Other', 'Hispanic', 'MSM'),
+      interv == 'base_case'
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Black', 'Other', 'Hispanic', 'MSM'),
+      interv == 'base_case'
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year + population ~ variable, value.var = 'value')
+
+summary_df <- group_by(df, site, sim, population, year) %>% 
+  summarize(
+    prevalence = (symptomatic_cases + asymptomatic_cases) / population_size
+    )
+
+ci_df <- group_by(summary_df, site, population, year) %>% 
+  summarise(
+    mean = mean(prevalence, na.rm=T),
+    ci_high = quantile(prevalence, 0.975, na.rm = T),
+    ci_low = quantile(prevalence, 0.025, na.rm = T)
+    )
+
+ggplot(ci_df, aes(x = year, y = mean, ymax = ci_high, ymin = ci_low, fill = population)) + 
+  geom_ribbon(size = 0, alpha=0.5) + 
+  geom_line(alpha=0.25) + 
+  facet_grid(population~site) + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  scale_x_continuous(breaks = seq(min(ci_df$year), max(ci_df$year), by = 4)) + 
+  ylab("Prevalence") + 
+  ggtitle("Prevalence Estimates by Site by Demographic")
+
+# ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_demographic.png", height = unit(4, 'in'))
+
+```
+
+### Prevalence Rate Ratios
+
+```{r prevalence rate ratios}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case'
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year ~ variable + population, value.var = 'value')
+
+all_pop_summary_df <- group_by(df, site, sim, year) %>% 
+  summarize(
+    prevalence = (
+    symptomatic_cases_Male + symptomatic_cases_Female + 
+      asymptomatic_cases_Male + asymptomatic_cases_Female
+    ) / (population_size_Male + population_size_Female)
+    )
+
+# per population
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case'
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case'
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year + population ~ variable, value.var = 'value')
+
+summary_df <- group_by(df, site, sim, population, year) %>% 
+  summarize(
+    prevalence = (symptomatic_cases + asymptomatic_cases) / population_size
+    )
+
+summary_df <- merge(summary_df, all_pop_summary_df, by = c('site', 'sim', 'year'))
+
+colnames(summary_df)[c(5,6)] <- c('demographic_prevalence', 'all_pop_prevalence')
+
+summary_df <- mutate(summary_df, 
+                     RR = demographic_prevalence / all_pop_prevalence)
+
+ci_df <- group_by(summary_df, site, population, year) %>% 
+  summarise(
+    mean = mean(RR, na.rm = T),
+    ci_high = quantile(RR, 0.975, na.rm = T),
+    ci_low = quantile(RR, 0.025, na.rm = T),
+    iq_high = quantile(RR, 0.75, na.rm = T),
+    iq_low = quantile(RR, 0.25, na.rm = T)
+  )
+
+ci_df <- filter(ci_df, site == 'BA' & year == 2017 | site == 'SF' & year == 2016)
+    
+ci_df$site <- sapply(ci_df$site, function(x) c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+ggplot(ci_df, aes(x = population, middle = mean, ymax = ci_high, ymin = ci_low, upper = iq_high, lower = iq_low, fill = population)) + 
+  geom_boxplot(stat = 'identity') + 
+  facet_grid(~site) + 
+  geom_hline(aes(group = 1), yintercept = 1, linetype = 'dashed', color = 'red') + 
+  theme_bw() + 
+  theme(legend.position = 'none', axis.text.x = element_text(angle = 25, vjust = .5)) + 
+  ylab("Prevalence Relative Rate") + 
+  xlab("Demographic Groups")  + 
+  ggtitle("Relative Rates of Prevalence")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_rate_ratio.png", height = unit(4, 'in'))
+
+```
+
+
+
+```{r incidence rate ratios}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case',
+      year %in% c(2021, 2022)
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Male', 'Female'),
+      interv == 'base_case',
+      year %in% c(2020, 2021)
+      ))
+      ))
+
+df <- reshape2::dcast(df, site + sim + year ~ variable + population, value.var = 'value')
+
+df <- mutate(df, incidents = incident_cases_Male + incident_cases_Female,
+             popsize = population_size_Male + population_size_Female) %>% 
+  select(-c(incident_cases_Male, incident_cases_Female, population_size_Male, population_size_Female))
+
+popsize_sf <- 303441.2
+popsize_ba <- 207800.2
+
+df <- do.call(rbind.data.frame, list(
+  filter(df, site == 'SF') %>% select(-popsize) %>% 
+    dcast(site + sim ~ year) %>% mutate(incidents = (`2021` - `2020`)/popsize_sf) %>%
+    select(site, sim, incidents),
+  filter(df, site == 'BA') %>% select(-popsize) %>% 
+    dcast(site + sim ~ year) %>% mutate(incidents = (`2022` - `2021`)/popsize_ba) %>%
+    select(site, sim, incidents)
+))
+
+incidence_in_last_year <- df
+
+
+
+# Now per population
+
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case',
+      year %in% c(2021, 2022)
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case',
+      year %in% c(2020, 2021)
+      ))
+      ))
+
+# df <- do.call(rbind.data.frame, list(
+#   filter(df, site == 'SF') %>% 
+#     dcast(site + sim ~ year, value.var = c(incident_cases, pop
+# ))
+
+library(data.table)
+df <- reshape2::dcast(df, site + sim + year + population ~ variable, value.var = 'value')
+
+df <- do.call(rbind.data.frame, list(
+  dcast(data.table::setDT(filter(df, site == 'SF')), site + sim + population ~ year, value.var = c('incident_cases', 'population_size')) %>% 
+    mutate(incidence = (incident_cases_2021 - incident_cases_2020) / population_size_2021) %>% 
+    select(-c(incident_cases_2021, incident_cases_2020, population_size_2021, population_size_2020)),
+  
+  dcast(data.table::setDT(filter(df, site == 'BA')), site + sim + population ~ year, value.var = c('incident_cases', 'population_size')) %>% 
+    mutate(incidence = (incident_cases_2022 - incident_cases_2021) / population_size_2021) %>% 
+    select(-c(incident_cases_2021, incident_cases_2022, population_size_2021, population_size_2022))
+))
+
+colnames(incidence_in_last_year)[3] <- 'all_pop_incidence'
+df <- merge(df, incidence_in_last_year, by = c('site', 'sim'))
+df <- mutate(df, incidence_rr = incidence / all_pop_incidence)
+
+summary_df <- group_by(df, site, population) %>% 
+  summarize(
+    ci_high = quantile(incidence_rr, 0.975,  na.rm = T),
+    iq_high = quantile(incidence_rr, 0.75,  na.rm = T),
+    mean = mean(incidence_rr, na.rm = T),
+    iq_low = quantile(incidence_rr, 0.25,  na.rm = T),
+    ci_low = quantile(incidence_rr, 0.025,  na.rm = T))
+
+summary_df$site <- sapply(summary_df$site, function(x) c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+ggplot(summary_df, aes(x = population, middle = mean, ymax = ci_high, ymin = ci_low, upper = iq_high, lower = iq_low, fill = population)) + 
+  geom_boxplot(stat = 'identity') + 
+  facet_grid(~site) + 
+  geom_hline(aes(group = 1), yintercept = 1, linetype = 'dashed', color = 'red') + 
+  theme_bw() + 
+  theme(legend.position = 'none', axis.text.x = element_text(angle = 25, vjust = .5)) + 
+  ylab("Incidence Relative Rate") + 
+  xlab("Demographic Groups") + 
+  ggtitle("Relative Rates of Incidence")
+
+ggsave("~/Documents/gcRegional/Rmd/2018/CDC Update Nov 6/incidence_rate_ratio.png", height = unit(4, 'in'))
+
+```
+
+
+```{r distribution of burden}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(
+      ba_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case',
+      year %in% c(2021, 2022)
+      )),
+      cbind.data.frame(site = 'SF', filter(
+      sf_df,
+      variable %in% c('population_size', 'incident_cases'),
+      population %in% c('Black Male', 'Black Female', 'Other Male', 'Other Female', 'Hispanic Male', 'Hispanic Female', 'MSM'),
+      interv == 'base_case',
+      year %in% c(2020, 2021)
+      ))
+      ))
+
+library(data.table)
+df <- reshape2::dcast(df, site + sim + year + population ~ variable, value.var = 'value')
+
+df <- do.call(rbind.data.frame, list(
+  dcast(filter(df, site == 'SF') %>% select(-population_size), site + sim + population ~ year) %>% 
+    mutate(incidents = (`2021` - `2020`)) %>% 
+    select(-c(`2021`, `2020`)),
+  
+  dcast(filter(df, site == 'BA'), site + sim + population ~ year, value.var = 'incident_cases') %>% 
+    mutate(incidents = (`2022` - `2021`)) %>% 
+    select(-c(`2021`, `2022`))
+))
+
+summary_df <- group_by(df, site, population) %>% 
+  summarize(
+    ci_high = quantile(incidents, 0.975,  na.rm = T),
+    iq_high = quantile(incidents, 0.75,  na.rm = T),
+    mean = mean(incidents, na.rm = T),
+    iq_low = quantile(incidents, 0.25,  na.rm = T),
+    ci_low = quantile(incidents, 0.025,  na.rm = T))
+
+# SF_total_cases <- filter(summary_df, site == 'SF')['mean']
+# BA_total_cases <- filter(summary_df, site == 'BA')['mean']
+
+summary_df_normalized <- group_by(df, site, sim) %>% 
+  mutate(fraction_of_all_incidents = incidents / sum(incidents))
+
+summary_df_normalized2 <- group_by(summary_df_normalized, site, population) %>% 
+  summarize(
+    ci_high = quantile(fraction_of_all_incidents, 0.975,  na.rm = T),
+    iq_high = quantile(fraction_of_all_incidents, 0.75,  na.rm = T),
+    mean = mean(fraction_of_all_incidents, na.rm = T),
+    iq_low = quantile(fraction_of_all_incidents, 0.25,  na.rm = T),
+    ci_low = quantile(fraction_of_all_incidents, 0.025,  na.rm = T))
+
+# summary_df_normalized <- 
+#   group_by(summary_df, site) %>% 
+#     mutate_if(is.numeric, funs(norm = . / sum(.)))
+
+
+ggplot(summary_df_normalized2, aes(x = population, y = mean, fill = population, color = population)) + 
+  geom_bar(stat = 'identity') + 
+  facet_wrap(~site) + 
+  ylab("Fraction of Incident Cases Among Demographic") + 
+  xlab("Demographic Groups") + 
+  theme(axis.text.x = element_text(angle = 25, vjust = 0.5)) 
+```
+
+```{r}
+
+summary_df_normalized2$site <- sapply(as.character(summary_df_normalized2$site), function(x) c(BA = 'Baltimore', SF = 'San Francisco')[[x]])
+ggplot(
+  summary_df_normalized2,
+  aes(
+  x = population,
+  y = 100*mean,
+  ymax = 100*ci_high,
+  ymin = 100*ci_low,
+  lower = 100*iq_low,
+  upper = 100*iq_high,
+  fill = population
+  )
+  ) + 
+  # geom_boxplot(stat = 'identity') + 
+  geom_bar(stat = 'identity') + 
+  geom_errorbar(stat = 'identity', width = 0.2, alpha=0.5) + 
+  facet_wrap(~site) + 
+  ylab("Percentage of Cases in Demographic") + 
+  xlab("Demographic Groups") + 
+  ggtitle("Percentage of Cases in Each Demographic") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 25, vjust = 0.5), legend.position = 'none') 
+
+ggsave("~/Documents/gcRegional/Rmd/2018/CDC Update Nov 6/distribution_of_cases.png", height = unit(5, 'in'))
+```
+
+```{r}
+ggplot(summary_df, aes(x = population, y = mean, fill = population, color = population)) + 
+  geom_bar(stat = 'identity') + 
+  facet_wrap(~site) + 
+  ylab("Incident Cases Among Demographic") + 
+  xlab("Demographic Groups") + 
+  theme(axis.text.x = element_text(angle = 25, vjust = 0.5)) 
+
+```
+
+
+### Intervention Analysis Results
+
+```{r get pre-computed intervention analysis results, cache = T}
+intervention_results <- readRDS(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'intervention_results.rds'))
+intervention_results <- intervention_results[complete.cases(intervention_results), ]
+
+intervention_results <- mutate(intervention_results, nns = additional_tests / cases_averted)
+
+ir_summary <- group_by(intervention_results, site, interv) %>% 
+  summarize(
+    ci_high_cases_averted = quantile(cases_averted, .975),
+    iq_high_cases_averted = quantile(cases_averted, .75),
+    median_cases_averted = median(cases_averted),
+    iq_low_cases_averted = quantile(cases_averted, .25),
+    ci_low_cases_averted = quantile(cases_averted, .025),
+    ci_high_nns = quantile(nns, 0.975),
+    iq_high_nns = quantile(nns, 0.75),
+    median_nns = median(nns),
+    iq_low_nns = quantile(nns, 0.25),
+    ci_low_nns = quantile(nns, 0.025),
+    ci_high_tests = quantile(additional_tests, 0.975),
+    iq_high_tests = quantile(additional_tests, 0.75),
+    median_tests = median(additional_tests),
+    iq_low_tests = quantile(additional_tests, 0.25),
+    ci_low_tests = quantile(additional_tests, 0.025)
+  )
+
+intervention_results$site <- ifelse(intervention_results$site == 'SF', 'San Francisco', 'Baltimore')
+ir_summary$site <- ifelse(ir_summary$site == 'SF', 'San Francisco', 'Baltimore')
+ir_summary$interv <- ordered(ir_summary$interv, levels = rev(intervention_descriptions$shortnames))
+
+  intervention_descriptions <- do.call(
+    cbind.data.frame,
+    list(
+      shortnames = 
+        c(
+          "base_case",
+          "high_activity_young_annual",
+          "high_activity_young_semi_annual",
+          "high_activity_young_quarter_annual",
+          "young_annual",
+          "young_semi_annual",
+          "young_quarter_annual",
+          "high_activity_MSM_annual",
+          "high_activity_MSM_semi_annual",
+          "high_activity_MSM_quarter_annual",
+          "MSM_annual",
+          "MSM_semi_annual",
+          "MSM_quarter_annual",
+          "high_activity_annual",
+          "high_activity_semi_annual",
+          "high_activity_quarter_annual",
+          "female_young_annual",
+          "female_young_semi_annual",
+          "female_young_quarter_annual",
+          "remove_ltfu_10pct",
+          "remove_ltfu_20pct",
+          "remove_f_msm_10pct_and_msw_20pct_ltfu",
+          "1year_high_activity_semi_annual"
+          ), 
+      names =
+        c(
+        base_case = "Base Case",
+        high_activity_young_annual = "High Risk Young Annual Screening",
+        high_activity_young_semi_annual = "High Risk Young Semi-Annual Screening",
+        high_activity_young_quarter_annual = "High Risk Young Quarter-Annual Screening",
+        young_annual = "Young Annual Screening",
+        young_semi_annual = "Young Semi-Annual Screening",
+        young_quarter_annual = "Young Quarter-Annual Screening",
+        high_activity_MSM_annual = "High Risk MSM Annual Screening",
+        high_activity_MSM_semi_annual = "High Risk MSM Semi-Annual Screening",
+        high_activity_MSM_quarter_annual = "High Risk MSM Quarter-Annual Screening",
+        MSM_annual = "MSM Annual Screening",
+        MSM_semi_annual = "MSM Semi-Annual Screening",
+        MSM_quarter_annual = "MSM Quarter-Annual Screening",
+        high_activity_annual = "High Risk Annual Screening",
+        high_activity_semi_annual = "High Risk Semi-Annual Screening",
+        high_activity_quarter_annual = "High Risk Quarter Annual Screening",
+        female_young_annual = "Female Young Annual Screening",
+        female_young_semi_annual = "Female Young Semi-Annual Screening",
+        female_young_quarter_annual = "Female Young Quarter-Annual Screening",
+        remove_ltfu_10pct = "Remove 10% LTFU",
+        remove_ltfu_20pct = "Remove 20% LTFU",
+        remove_f_msm_10pct_and_msw_20pct_ltfu = "Remove 10% LTFU for Women and MSM, 20% LTFU for MSW",
+        `1year_high_activity_semi_annual` = 'High Activity Twice Annual Screening for One Year'
+        ),
+      frequency = 
+        c(
+          "base_case",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "annual",
+          "semi_annual",
+          "quarter_annual",
+          "ltfu",
+          "ltfu",
+          "ltfu",
+          "semi_annual"
+          )
+    )
+  )
+empirical_interventions <- c('remove_ltfu_10pct', 'remove_ltfu_20pct', 'remove_f_msm_10pct_and_msw_20pct_ltfu', '1year_high_activity_semi_annual')
+interventions <- setdiff(unique(ba_df$interv), 'base_case')
+```
+
+```{r prevalence for interventions}
+
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(ba_df, variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'), population %in% c('Male', 'Female'))),
+    cbind.data.frame(site = 'SF', filter(sf_df, variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'), population %in% c('Male', 'Female')))
+  ))
+
+df <- reshape2::dcast(df, site + sim + interv + year ~ variable + population)
+
+summary_df <- group_by(df, site, sim, interv, year) %>% 
+  summarize(
+    prevalence = (
+    symptomatic_cases_Male + symptomatic_cases_Female + 
+      asymptomatic_cases_Male + asymptomatic_cases_Female
+    ) / (population_size_Male + population_size_Female)
+    )
+
+# incomplete_sims <- unique(summary_df[!complete.cases(summary_df), 'sim'])
+# summary_df <- filter(summary_df, ! sim %in% incomplete_sims)
+
+ci_df <- group_by(summary_df, site, interv, year) %>% 
+  summarise(mean = mean(prevalence, na.rm=T),
+            ci_high = quantile(prevalence, 0.975, na.rm = T),
+            ci_low = quantile(prevalence, 0.025, na.rm = T))
+
+for (year in 2010:2017) {
+  ci_df[ci_df$year == year & ci_df$interv != 'base_case' & ci_df$site == 'BA', 'mean'] <- ci_df[ci_df$year == year & ci_df$interv == 'base_case' & ci_df$site == 'BA', 'mean']
+}
+for (year in 2010:2016) {
+  ci_df[ci_df$year == year & ci_df$interv != 'base_case' & ci_df$site == 'SF', 'mean'] <- ci_df[ci_df$year == year & ci_df$interv == 'base_case' & ci_df$site == 'SF', 'mean']
+}
+
+library(ggplot2)
+
+# # plotting each interventions prevalence in a facet
+
+# ci_df$interv <- sapply(ci_df$interv, function(str) paste0(strwrap(gsub("_", " ", str), width = 15), collapse='\n'))
+# 
+# ggplot(ci_df, aes(x = year, y = mean, ymax = ci_high, ymin = ci_low, fill = interv, color = interv)) + 
+#   geom_ribbon(size = 0, alpha=0.5) + 
+#   geom_line() + 
+#   facet_grid(site ~ interv) + 
+#   theme(legend.position = 'none', axis.text.x = element_text(angle = 90)) + 
+#   scale_x_continuous(breaks = seq(min(ci_df$year), max(ci_df$year), by = 4))
+
+
+summary_df_dcast <- dcast(summary_df, site + sim + year ~ interv)
+
+library(magrittr)
+
+
+
+for (interv in interventions) {
+    summary_df_dcast[[interv]] = summary_df_dcast[[interv]] / summary_df_dcast[['base_case']]
+}
+
+summary_df_dcast %<>% select(-base_case)
+
+relative_summary_df <- melt(summary_df_dcast, id.vars = c('site', 'sim', 'year'), variable.name = 'interv', value.name = 'prevalence')
+
+relative_ci_df <- relative_summary_df %>%  
+  group_by(site, interv, year) %>% 
+  summarise(mean = mean(prevalence, na.rm = T), 
+            ci_high = quantile(prevalence, 0.975, na.rm = T),
+            iq_high = quantile(prevalence, 0.75, na.rm = T),
+            ci_low = quantile(prevalence, 0.025, na.rm = T),
+            iq_low = quantile(prevalence, 0.25, na.rm = T))
+  
+library(ggrepel)
+
+last_data_points_relative <- as.data.frame(do.call(
+  rbind.data.frame,
+  list(
+    filter(relative_ci_df, site == 'BA', year == 2022),
+    filter(relative_ci_df, site == 'SF', year == 2021)
+  )))
+
+last_data_points_absolute <- as.data.frame(do.call(
+  rbind.data.frame,
+  list(
+    filter(ci_df, site == 'BA', year == 2022),
+    filter(ci_df, site == 'SF', year == 2021)
+  )))
+
+library(ggrepel)
+
+# Plot Mean Prevalence Time Trends
+
+
+ci_df$site <-
+  sapply(as.character(ci_df$site), function(x)
+  c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+last_data_points_absolute$site <-
+  sapply(as.character(last_data_points_absolute$site), function(x)
+  c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+last_data_points_relative$site <-
+  sapply(as.character(last_data_points_relative$site), function(x)
+  c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+
+ci_df[ci_df$site == 'San Francisco', 'year'] <- ci_df[ci_df$site == 'San Francisco', 'year'] - 2016
+ci_df[ci_df$site == 'Baltimore', 'year'] <- ci_df[ci_df$site == 'Baltimore', 'year'] - 2017
+
+last_data_points_absolute[last_data_points_absolute$site == 'San Francisco', 'year'] <-
+  last_data_points_absolute[last_data_points_absolute$site == 'San Francisco', 'year'] - 2016
+  last_data_points_absolute[last_data_points_absolute$site == 'Baltimore', 'year'] <-
+  last_data_points_absolute[last_data_points_absolute$site == 'Baltimore', 'year'] - 2017
+  
+last_data_points_absolute <- merge(last_data_points_absolute, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+last_data_points_absolute$names <- ordered(last_data_points_absolute$names, levels = rev(intervention_descriptions$names))
+
+  
+
+ggplot(filter(ci_df, year >= 0, interv %in% c(empirical_interventions, 'base_case')), aes(x = year, y = 100*mean, color = interv)) + 
+  geom_line() + 
+  facet_wrap(~site) + 
+  scale_x_continuous(
+    breaks = seq(min(ci_df$year), max(ci_df$year), by = 1), 
+    limits = c(0, 7)) +
+  geom_label_repel(
+    data = filter(last_data_points_absolute, interv %in% c(empirical_interventions, 'base_case')),
+    aes(
+    x = year,
+    y = 100*mean,
+    group = interv,
+    label = interv
+    ),
+    segment.color = 'black',
+    segment.size = 0.5,
+    segment.alpha = 0.5,
+    linetype = 'dashed',
+    nudge_x = 2.5,
+    direction = 'y',
+    size = 2
+    ) +
+  expand_limits(y = 0) + 
+  ylab("Prevalence") +
+  xlab("Years After Intervention Start") + 
+  theme_bw() + 
+  theme(legend.position = 'none')
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_prevalence_absolute_empirical.png",   dpi = 300,
+  width = unit(9, 'in'),
+  height = unit(5, 'in')
+  )
+
+
+ggplot(filter(ci_df, year >= 0, ! interv %in% empirical_interventions), aes(x = year, y = 100*mean, color = interv)) + 
+  geom_line() + 
+  facet_wrap(~site) + 
+  scale_x_continuous(
+    breaks = seq(min(ci_df$year), max(ci_df$year), by = 1), 
+    limits = c(0, 7)) +
+  geom_label_repel(
+    data = filter(last_data_points_absolute, ! interv %in% empirical_interventions ),
+    aes(
+    x = year,
+    y = 100*mean,
+    group = interv,
+    label = interv
+    ),
+    segment.color = 'black',
+    segment.size = .5,
+    segment.alpha = 0.5,
+    nudge_x = 2.5,
+    direction = 'y',
+    size = 2
+    ) +
+  ylab("Prevalence") +
+  xlab("Years After Intervention Start") + 
+  expand_limits(y=0) + 
+  theme_bw() + 
+  theme(legend.position = 'none')
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_prevalence_absolute_hypothetical.png",   dpi = 300,
+  width = unit(9, 'in'),
+  height = unit(5, 'in')
+  )
+
+last_data_points_relative <- merge(last_data_points_relative, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+last_data_points_relative$names <- ordered(last_data_points_relative$names, levels = rev(intervention_descriptions$names))
+
+ggplot(
+  filter(last_data_points_relative, interv %in% empirical_interventions),
+  aes(
+  x = names,
+  middle = 100-100*mean,
+  ymax = 100-100*ci_high,
+  ymin = 100-100*ci_low,
+  upper = 100-100*iq_high,
+  lower = 100-100*iq_low
+  ),
+  alpha = 0.5
+  ) + 
+  geom_boxplot(stat = 'identity') + 
+  facet_wrap(~site) + 
+  coord_flip() + 
+  theme_bw() + 
+  theme(legend.position = 'none', axis.title.x = element_text(hjust = 1)) + 
+  xlab("") + 
+  ylab("Prevalence Reduction as a Percentage of Base Case Prevalence") + 
+  expand_limits(y=0) + 
+  ggtitle("Relative Reduction in Prevalence", subtitle = "Interventions Based on Current Strategies")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_ratio_in_last_year_empirical.png", height = unit(5, 'in'), width = unit(9, 'in'))
+
+ggplot(
+  filter(last_data_points_relative, ! interv %in% empirical_interventions),
+  aes(
+  x = names,
+  middle = 100-100*mean,
+  ymax = 100-100*ci_high,
+  ymin = 100-100*ci_low,
+  upper = 100-100*iq_high,
+  lower = 100-100*iq_low
+  ),
+  alpha = 0.5
+  ) + 
+  geom_boxplot(stat = 'identity') + 
+  facet_wrap(~site) + 
+  coord_flip() + 
+  theme_bw() + 
+  theme(legend.position = 'none', axis.title.x = element_text(hjust = 1)) + 
+  xlab("") + 
+  ylab("Prevalence Reduction as a Percentage of Base Case Prevalence") + 
+  expand_limits(y=0) + 
+  ggtitle("Relative Reduction in Prevalence", subtitle = "Hypothetical Interventions")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_ratio_in_last_year_hypothetical.png", height = unit(5, 'in'), width = unit(9, 'in'))
+
+
+```
+
+
+```{r cases averted, cache = T}
+
+ggplot(ir_summary) + 
+  geom_boxplot(stat = 'identity', aes(x = interv, ymax = ci_high_cases_averted, upper = iq_high_cases_averted, middle = median_cases_averted, lower = iq_low_cases_averted, ymin = ci_low_cases_averted)) + 
+  ggtitle("Number of Cases Averted After 5 Years by Intervention") + 
+  geom_hline(yintercept = 0, linetype ='dashed', color = 'red', alpha = 0.5) +
+  facet_wrap(~site) + 
+  coord_flip()  
+```
+
+
+```{r intervention outcomes - additional tests and cases averted}
+colnames(ir_summary) <- 
+  c(
+    'site',
+    'interv',
+    'ci_high cases_averted',
+    'iq_high cases_averted',
+    'median cases_averted',
+    'iq_low cases_averted',
+    'ci_low cases_averted',
+    'ci_high nns',
+    'iq_high nns',
+    'median nns',
+    'iq_low nns',
+    'ci_low nns',
+    'ci_high additional_tests',
+    'iq_high additional_tests',
+    'median additional_tests',
+    'iq_low additional_tests',
+    'ci_low additional_tests'
+  )
+
+library(reshape2)
+library(tidyr)
+ir_melt <- melt(ir_summary, id.vars = c('site', 'interv'))
+ir_melt_sep <- separate(ir_melt, col = 'variable', into = c('stat', 'variable'), sep = ' ')
+ir_dcast <- dcast(ir_melt_sep, site + interv + variable ~ stat)
+
+ir_merge <- merge(ir_dcast, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+
+ir_merge$names <- ordered(ir_merge$names, rev(intervention_descriptions$names))
+
+ir_merge$variable <-
+  sapply(ir_merge$variable, function(x)
+  c(additional_tests = 'Additional Tests', cases_averted = 'Cases Averted', nns = 'Number Needed to Screen')[[x]])
+
+upper_val_add_tests <- max(filter(ir_merge, variable == 'Additional Tests')[['ci_high']])
+upper_val_cases_averted <- max(filter(ir_merge, variable == 'Cases Averted')[['ci_high']])
+
+ggplot(filter(ir_merge, site == 'Baltimore', variable %in% c('Additional Tests', 'Cases Averted'), interv %in% empirical_interventions)) + 
+  geom_boxplot(
+    stat = 'identity',
+    aes(
+    x = names,
+    ymax = 100*ci_high,
+    upper = 100*iq_high,
+    middle = 100*median,
+    lower = 100*iq_low,
+    ymin = 100*ci_low
+    # fill = frequency
+    )
+    ) + 
+  ggtitle("Intervention Outcomes in Baltimore", subtitle = "Interventions Based on Current Strategies") + 
+  theme_bw() + 
+  facet_wrap(~variable, scales = 'free_x') + 
+  coord_flip()  +
+  xlab("") + 
+  expand_limits(y=0) + 
+  theme(axis.title.x = element_text(hjust = 1)) + 
+  ylab("Additional Tests and Cases Averted as a Percentage of the Base Case")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_outcomes_tests_ca_ba_empirical.png",
+height = unit(6, 'in'), width = unit(9, 'in'))
+
+ggplot(
+  filter(
+  ir_merge,
+  site == 'Baltimore',
+  variable %in% c('Additional Tests', 'Cases Averted'),
+  !interv %in% empirical_interventions
+  )
+  ) + 
+  geom_boxplot(
+    stat = 'identity',
+    aes(
+    x = names,
+    ymax = 100*ci_high,
+    upper = 100*iq_high,
+    middle = 100*median,
+    lower = 100*iq_low,
+    ymin = 100*ci_low
+    # fill = frequency
+    )
+    ) + 
+  ggtitle("Intervention Outcomes in Baltimore", subtitle = "Hypothetical Interventions") + 
+  theme_bw() + 
+  facet_wrap(~variable, scales = 'free_x') + 
+  coord_flip()  +
+  xlab("") + 
+  expand_limits(y=0) + 
+  theme(axis.title.x = element_text(hjust = 1)) + 
+  ylab("Additional Tests and Cases Averted as a Percentage of the Base Case")
+
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_outcomes_tests_ca_ba_hypothetical.png",
+height = unit(6, 'in'), width = unit(9, 'in'))
+
+
+ggplot(filter(ir_merge, site == 'San Francisco', variable %in% c('Additional Tests', 'Cases Averted'), interv %in% empirical_interventions)) + 
+  geom_boxplot(
+    stat = 'identity',
+    aes(
+    x = names,
+    ymax = 100*ci_high,
+    upper = 100*iq_high,
+    middle = 100*median,
+    lower = 100*iq_low,
+    ymin = 100*ci_low
+    )
+    ) + 
+  ggtitle("Intervention Outcomes in San Francisco", subtitle = "Interventions Based on Current Strategies") + 
+  theme_bw() + 
+  facet_wrap(~variable, scales = 'free_x') + 
+  coord_flip()  +
+  xlab("") + 
+  expand_limits(y=0) + 
+  theme(axis.title.x = element_text(hjust = 1)) + 
+  ylab("Additional Tests and Cases Averted as a Percentage of the Base Case")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_outcomes_tests_ca_sf_empirical.png", height = unit(6, 'in'), width = unit(9, 'in'))
+
+ggplot(filter(ir_merge, site == 'San Francisco', variable %in% c('Additional Tests', 'Cases Averted'), ! interv %in% empirical_interventions)) + 
+  geom_boxplot(
+    stat = 'identity',
+    aes(
+    x = names,
+    ymax = 100*ci_high,
+    upper = 100*iq_high,
+    middle = 100*median,
+    lower = 100*iq_low,
+    ymin = 100*ci_low
+    )
+    ) + 
+  ggtitle("Intervention Outcomes in San Francisco", subtitle = "Hypothetical Interventions") + 
+  theme_bw() + 
+  facet_wrap(~variable, scales = 'free_x') + 
+  coord_flip()  +
+  xlab("") + 
+  expand_limits(y=0) + 
+  theme(axis.title.x = element_text(hjust = 1)) + 
+  ylab("Additional Tests and Cases Averted as a Percentage of the Base Case")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/intervention_outcomes_tests_ca_sf_hypothetical.png", height = unit(6, 'in'), width = unit(9, 'in'))
+
+```

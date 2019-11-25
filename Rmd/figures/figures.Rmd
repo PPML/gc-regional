@@ -1,0 +1,46 @@
+---
+title: Figures Documentation
+author: Christian Testa
+date: November 16th, 2019
+output:
+  html_document: 
+    toc: true
+---
+
+# Introduction 
+
+This document serves the purpose of answering the question "How are the figures 
+in the publication, *The potential population-level impact of different gonorrhea screening strategies in Baltimore and San Francisco:  an exploratory mathematical modeling analysis*, generated?"
+
+This document will answer that question by using the functions in
+`gcRegional` which generate the manuscripts' figures from . 
+
+# Main Manuscript
+
+## Table 1 - Interventions Schema
+
+## Figure 1 - Fit to Case Counts
+
+## Figure 2 - Intervention Scenario Prevalence Time Trends 
+
+## Figure 3 - Intervention Scenario Incident Infections Averted and Additional Tests
+
+## Figure 4 - Infections Averted in Removal of Loss-to-Follow-Up Scenarios
+
+## Table 2 - Number Needed to Test and Treat to Avert an Additional Case
+
+<hrule>
+
+# Supplemental Materials
+
+## Supplement 1 
+
+### Model Estimated Incidence Compared to Reported Data
+
+### MSM Sensitivity Analysis
+
+### Mobile Outreach Sensitivity Analysis
+
+## Supplement 2 - Calibration Plots for Baltimore
+
+## Supplement 3 - Calibration Plots for San Francisco

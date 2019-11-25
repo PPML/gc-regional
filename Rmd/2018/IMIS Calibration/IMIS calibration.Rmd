@@ -1,0 +1,31 @@
+---
+title: Model Calibration using IMIS
+---
+
+To use IMIS, we need to ensure that our prior and likelihood
+functions are on absolute-scale (as opposed to log-scale).
+To do this, we will declare `'imis'` inside:
+
+```{r}
+gc_testing <- c('imis', 'logistic_screening', 'only_increasing_screening')
+library(IMIS)
+library(gcRegional)
+```
+
+If one refers to the documentation `?IMIS` we see that we 
+need to have the `prior`, `likelihood`, and a `sample.prior`
+function. The only one of these we don't yet have is 
+`sample.prior`.
+
+```{r construct sample.prior}
+sample.prior <- function(n) { t(sapply(1:n, function(x) sample_prior())) }
+```
+
+```{r test if prior, likelihood, and sample.prior work correctly}
+load_start("SF")
+```
+
+
+```{r run imis}
+result = IMIS(50, 300, 10, 10)
+```

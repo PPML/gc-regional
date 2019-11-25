@@ -1,0 +1,224 @@
+---
+title: Simulating Intervention Scenarios
+---
+
+In order to simulate intervention scenarios we 
+change the screening matrix used over the 2018-2023 
+time period. In doing so, our simulations are altered to forecast 
+the outcomes of two kinds of intervention scenarios:
+Demographic targeted interventions, and interventions
+where Loss-to-Follow-Up and Delay to treatment are
+removed. 
+
+First, we need our fit models and their projections over 2010 - 2023 as
+our base case.
+
+```{r, cache=T}
+library(gcRegional)
+library(ggplot2)
+
+# Change the settings for screening trends which are only increasing logistic curves.
+gc_testing <- c('logistic_screening', 'only_increasing_screening')
+
+# Configure the model for Baltimore:
+load_start("BA")
+
+# Load model fit:
+post.sample <- readRDS("~/Documents/gc-regional-project/data/2018-07-11-gcR-BA-calibration/post_sample.rds")
+
+# post.sample has an mcmc chain of parameter vectors and the model simulations
+# which correspond each row of parameter values.
+summary(post.sample)
+
+# In order to be able to work with this in this document, I'm going to take a
+# sample of only 10 to work with by hand on my computer.
+
+trace <- as.data.frame(post.sample$theta.list)
+trace.burn.thin <- trace
+
+# post.sample <- model_fits(trace.burn.thin, 20)
+# pred <- as.data.frame(post.sample$outputs)
+pred <- NULL
+trace.sample <- trace[sample.int(nrow(trace), 10), ]
+for (i in seq(nrow(trace.sample))) {
+  res <- prediction_epi(unlist(trace.sample[i, ]), interv = "base_case")
+  pred <- rbind.data.frame(unlist(res), pred)
+}
+colnames(pred) <- names(unlist(res))
+```
+
+
+```{r}
+# This is when we could run plot_posteriors.
+# plot_posteriors(output_directory = "~/Desktop/")
+
+# Now I'd like to try and run the model for a longer forecast. 
+gc_env$model.end <- gc_env$model.end + 5
+gc_env$cal.end <- gc_env$cal.end + 5
+```
+
+```{r compute avg prevalence, cache = T}
+out <- tidy_prevalence_dfs_for_many_simulations(
+  trace_sample = trace.sample,
+  ijkl_subset = c('l', 'j', 'i'), # excluding k because that's the "Low/High" risk group
+  relative = F,
+  years = 2010:2021,
+  interv = 'base_case')
+
+avg_prevalence <- average_tidy_prevalence_dfs(out)
+
+#' summarize_prevalence's 
+summarize_prevalence <- function(prevalence) {
+  avg_burden <- prevalence[[1]]
+  for (j in 1:nrow(prevalence[[1]])) {
+    avg_burden[j, 4] <-
+      mean(sapply(1:length(prevalence), function(i)
+        prevalence[[i]][j, 4]), na.rm = T)
+  }
+  return(avg_burden)
+}
+
+prev_as_nested_sim_df <- function(prev) {
+  a <- data.frame(sim = 1:length(prev))
+  # remove the sim column from each df since it's just duplicated ints... 
+  prev <- lapply(1:length(prev), function(x) dplyr::select(prev[[x]], -sim))
+  a$data <- prev
+  return(a)
+}
+
+prev <- prev_as_nested_sim_df(out)
+avg_prev <- prev$data[[1]][, c('year', 'demographic')]
+avg_prev$mean <- sapply(1:nrow(avg_prev), function(x) {
+  mean(
+    sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value'])
+  )})
+avg_prev$ci_high <- sapply(1:nrow(avg_prev), function(x) {
+  quantile(
+    x = sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value']),
+    probs = .975
+  )})
+avg_prev$ci_low <- sapply(1:nrow(avg_prev), function(x) {
+  quantile(
+    x = sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value']),
+    probs = .025
+  )})
+```
+
+```{r split the demographic column}
+avg_prev <- tidyr::separate(avg_prev, demographic, into = c('age', 'sex', 'race'), remove=F)
+avg_prev <- tidyr::unite(avg_prev, col = 'racesex', race, sex, remove = F, sep=' ')
+```
+
+```{r visualize avg prevalence, cache=T}
+p <- 
+  ggplot(
+    data = avg_prev,
+    mapping = aes(
+      x = year + 2009,
+      y = mean,
+      ymax = ci_high,
+      ymin = ci_low,
+      fill = demographic,
+      color = demographic
+      )) +
+  geom_ribbon(alpha=0.4, size = 0) +  
+  geom_line() +  
+  ggtitle(
+    paste0(
+      "Projected Number of Infected Individuals in ",
+      switch(gc_env$site, SF = "San Francisco", BA = "Baltimore")
+    )
+  ) +
+  xlab("Year") +
+  ylab("Number of Infected Individuals") +
+  facet_wrap(~racesex) + 
+  theme(
+    axis.text.x = element_text(angle = 90),
+    legend.position = 'bottom',
+    legend.text = element_text(size = 10)
+  )
+
+print(p)
+
+ggsave(p, filename = '~/Documents/gc-regional-project/outputs/2018-07-21/number_of_prevalent_cases.png', dpi = 300, width = unit(10, 'in'))
+```
+
+
+
+# Now let's try interventions
+
+```{r MSM_annual intervention, cache=T}
+out <- tidy_prevalence_dfs_for_many_simulations(
+  trace_sample = trace.sample,
+  ijkl_subset = c('l', 'j', 'i'), # excluding k because that's the "Low/High" risk group
+  relative = F,
+  years = 2010:2021,
+  interv = 'remove_ltfu_and_delay_3week_20pct')
+
+prev <- prev_as_nested_sim_df(out)
+
+prev_with_ci <- function(prev) {
+  avg_prev <- prev$data[[1]][, c('year', 'demographic')]
+  avg_prev$mean <- sapply(1:nrow(avg_prev), function(x) {
+    mean(
+      sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value'])
+    )})
+  avg_prev$ci_high <- sapply(1:nrow(avg_prev), function(x) {
+    quantile(
+      x = sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value']),
+      probs = .975
+    )})
+  avg_prev$ci_low <- sapply(1:nrow(avg_prev), function(x) {
+    quantile(
+      x = sapply(seq_along(prev$sim), function(y) prev$data[[y]][x, 'value']),
+      probs = .025
+    )})
+  # split up the 'demographic' 
+  avg_prev <- tidyr::separate(avg_prev, demographic, into = c('age', 'sex', 'race'), remove=F)
+  avg_prev <- tidyr::unite(avg_prev, col = 'racesex', race, sex, remove = F, sep=' ')
+
+  return(avg_prev)
+}
+
+avg_prev <- prev_with_ci(prev)
+
+plot_prevalent_cases <- function(avg_prev, subtitle = NULL) {
+  p <- 
+  ggplot(
+    data = avg_prev,
+    mapping = aes(
+      x = year + 2009,
+      y = mean,
+      ymax = ci_high,
+      ymin = ci_low,
+      fill = demographic,
+      color = demographic
+      )) +
+  geom_ribbon(alpha=0.4, size = 0) +  
+  geom_line() +  
+  ggtitle(
+    paste0(
+      "Projected Number of Infected Individuals in ",
+      switch(gc_env$site, SF = "San Francisco", BA = "Baltimore")
+    ),
+    subtitle = ifelse(is.null(subtitle), NULL, subtitle)
+  ) +
+  xlab("Year") +
+  ylab("Number of Infected Individuals") +
+  facet_wrap(~racesex) + 
+  theme(
+    axis.text.x = element_text(angle = 90),
+    legend.position = 'bottom',
+    legend.text = element_text(size = 10)
+  )
+
+  return(p)
+}
+
+p <- plot_prevalent_cases(avg_prev, subtitle = 'Projections with 3 Week Treatment Delay and 20% LTFU Removed')
+print(p)
+
+ggsave(p, filename = '~/Documents/gc-regional-project/outputs/2018-07-21/remove_ltfu_3week_20pct_prevalent_cases.png', dpi = 300, width = unit(10, 'in'), height = unit(7, 'in'))
+
+```
+

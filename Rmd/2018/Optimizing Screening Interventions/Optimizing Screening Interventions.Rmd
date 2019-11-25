@@ -1,0 +1,213 @@
+---
+title: Optimizing Prevalence Reduction
+output: html_document
+---
+
+
+We've come up with a few ways to re-interpret screening interventions as 
+optimization problems. Fundamentally, these rest on the assumption 
+that we want to optimize the reduction in prevalence with the minimal
+possible change to current screening rates. 
+
+The two approaches we will consider in this document are to optimize 
+prevalence reduction as a function of proportional distribution of screening
+and to optimize prevalence reduction with a penalty term for change in
+each compartment's screening rates.
+
+The first of these makes the mild assumption that because the susceptible and
+asymptomatic population sizes are much greater than the symptomatic-infected
+population size that re-allocating screening across compartments
+such that the same number of tests are provided in the first year 
+as compared to the base case will not yield a drastically different number of 
+tests performed over the intervention time period as compared to the base case.
+The error in this assumption is measured by computing the number of additional 
+tests done in the re-allocated screening scenario. If it is of interest, 
+we can also compare the re-allocated screening scenario and the base case 
+against a no-screening scenario to measure the number needed to test to avert
+one case.
+
+The second of these optimization approaches to finding optimal screening
+interventions accepts the reality that holding total testing fixed while varying
+subpopulation screening levels is a difficult problem and addresses this by 
+penalizing for change in the number of tests per subpopulation. 
+
+# First Approach - Redistributive Screening
+
+Let $scr$ represent the vector of screening rates across subpopulations and 
+let $pop$ represent the population sizes across subpopulations. 
+
+The product of screening rates and the population 
+yields the total number of tests, $ntests$:
+$$\displaystyle\sum_i scr_i \cdot pop_i = ntests.$$
+
+Thus we can define the proportion of total tests each population is receiving:
+$$\tau_i = (scr_i \cdot pop_i) / ntests.$$
+
+Note that the sum of the proportions of tests received by each subpopulation totals to 1,
+$\sum_i \tau_i = 1$.
+
+In order to turn this into a $\mathbb R$-scale problem for optimization, we can use the logit transform.
+Let $\zeta_i = \text{logit}(\tau_i)$.
+
+Now we can optimize with the following approach: 
+
+Vary $\zeta \in \mathbb R^n$, convert $\zeta \rightarrow scr$, simulate 5 years into the future, 
+and measure the reduction in prevalence reduction as compared to the base-case.
+
+Since optimization doesn't know that we want to maintain $\sum \tau = 1$ we make sure 
+that when converting $\zeta \rightarrow \tau \rightarrow scr$ we calculate each $\tau_i$ 
+as a proportions of the total.
+
+$$\tau_i = \text{ilogit}(\zeta_i) / \sum_j \text{ilogit}(\zeta_j)$$
+
+Now we have the proportions of total tests that we'll suppose each subpopulation receives. 
+We can multiply this by the number of tests and divide by population size to get back 
+to the screening rate. 
+
+$$scr = \tau \cdot ntests / pop$$
+
+In principle, we could scale $ntests$ to be higher or lower than the number of tests
+in the base case to find optimal distributions of screening if total screening were 
+to increase or decrease.
+
+If we were to implement this schema as described, optimization would not converge
+because $\tau$ is defined proportionally from $\text{ilogit}(\zeta)$, and so the 
+optimal solution is a ridge of values; i.e. scaling all values of $\text{ilogit}(\zeta)$
+by the same coefficient has no effect on the optimality of $\zeta$. In order
+to correct for this, we add a penalty term to our optimization problem that encourages
+$\sum \text{ilogit}(\zeta) = 1$.
+
+
+```{r dependencies, echo=F}
+library(gcRegional)
+```
+
+```{r transformations}
+transform_scr <- function(scr, popsizes) {
+  tau <- scr*popsizes
+  tau <- tau / sum(tau)
+  zeta <- logit(tau)
+  return(zeta)
+}
+
+untransform_zeta <- function(zeta, popsizes, ntests) {
+  tau <- ilogit(zeta)/sum(ilogit(zeta))
+  scr <- tau * ntests / popsizes
+  return(scr)
+}
+
+# get screenable population size
+get_popsizes <- function(sol) {
+  (sol[gc_env$cal.end, 1+gc_env$s.index] + sol[gc_env$cal.end, 1+gc_env$z.index])[1:28]
+}
+
+#' Optimize Screening
+prevalence_reduction_via_screening <- function(zeta, theta, increase = 0) {
+  e <- create_gcSim_param_env(theta) # construct simulation environment
+  run_gcSim_with_environment(e) # run simulation with theta in base_case
+  sol <- e$out.cpp$out
+  popsizes <- get_popsizes(sol) # calculate screenable popsize as symptomatic + asymptomatic
+  theta_scr <- e$screen[gc_env$cal.end, 1:28] # get screening rates as determined by theta
+  ntests <- sum(theta_scr*popsizes) # get number of tests done in cal.end year
+  basecase_prev <- # get prevalence in last year of basecase simulation
+    sum(sol[nrow(sol), 1 + c(gc_env$y.index, gc_env$z.index)]) / sum(sol[nrow(sol), 1 +
+    c(gc_env$s.index, gc_env$y.index, gc_env$z.index)]) 
+
+  # convert tau from log-scale to >0 and normalize so that after the
+  # cal.end year the number of tests is increased by approximately (increase)%.
+  scr <- untransform_zeta(zeta, popsizes, ntests * (1+increase))
+
+  # update screening matrix
+  for (row in gc_env$intervention_rows) { e$screen[row, 1:28] <- scr }
+  e$params$screen <- e$screen
+
+  # re-run model
+  run_gcSim_with_environment(e)
+  sol <- e$out.cpp$out
+
+  # get prevalence in last year after changing prevalence
+  scr_prev <- sum(sol[nrow(sol), 1 + c(gc_env$y.index, gc_env$z.index)]) / sum(sol[nrow(sol), 1+c(gc_env$s.index, gc_env$y.index, gc_env$z.index)])
+
+  # return:
+  #  - relative reduction in prevalence
+  return(list(
+    prevalence_relative_reduction = (basecase_prev - scr_prev) / basecase_prev,
+    scr = scr,
+    relative_scr = scr / theta_scr
+  ))
+}
+
+optim_fun_0 <- function(zeta, increase = 0) {
+  penalty <- (1-sum(ilogit(zeta)))^2
+  out <- prevalence_reduction_via_screening(zeta, theta = theta, increase = 0)
+  val <- out$prevalence_relative_reduction - penalty
+  print(val)
+  return(val)
+}
+
+
+optim_fun_1 <- function(zeta, increase = 0) {
+  penalty <- (1-sum(ilogit(zeta)))^2
+  out <- prevalence_reduction_via_screening(zeta, theta = theta, increase = 0)
+  penalty2 <- sum((out$relative_scr-1)^2)
+  val <- out$prevalence_relative_reduction - penalty - penalty2
+  # print(val)
+  print(paste0("PR: ", out$prevalence_relative_reduction, ", P2: ", penalty2))
+  return(val)
+}
+
+optim_fun_2 <- function(zeta, increase = 0) {
+  penalty <- (1-sum(ilogit(zeta)))^2
+  out <- prevalence_reduction_via_screening(zeta, theta = theta, increase = 0)
+  penalty2 <- sum((out$relative_scr-1)^4)
+  val <- out$prevalence_relative_reduction - penalty - penalty2
+  # print(val)
+  print(paste0("PR: ", out$prevalence_relative_reduction, ", P2: ", penalty2))
+  return(val)
+}
+
+optim_fun_3 <- function(zeta, increase = 0) {
+  penalty <- (1-sum(ilogit(zeta)))^2
+  out <- prevalence_reduction_via_screening(zeta, theta = theta, increase = 0)
+  penalty2 <- sum(((out$relative_scr-1)/4)^2)
+  val <- out$prevalence_relative_reduction - penalty - penalty2
+  # print(val)
+  print(paste0("PR: ", out$prevalence_relative_reduction, ", P2: ", penalty2))
+  return(val)
+}
+
+
+```
+
+```{r running the optimization, cache=T}
+load_start("BA")
+theta <- gc_env$theta
+
+gc_env$n_intervention_years <- max(nrow(e$screen) - (gc_env$cal.end), 0)
+gc_env$intervention_rows <- (nrow(e$screen) - gc_env$n_intervention_years):nrow(e$screen)
+
+
+# construct simulation environment
+e <- create_gcSim_param_env(theta)
+
+# run simulation with theta in base_case
+run_gcSim_with_environment(e)
+sol <- e$out.cpp$out
+
+# calculate screenable popsize as symptomatic + asymptomatic
+popsizes <- get_popsizes(sol)
+
+# get screening rates as determined by theta
+theta_scr <- e$screen[gc_env$cal.end, 1:28]
+
+# get number of tests done in cal.end year
+ntests <- sum(theta_scr*popsizes)
+
+tau <- theta_scr*popsizes
+tau <- tau / sum(tau)
+zeta <- logit(tau)
+
+out <- optim(par = zeta, fn = optim_fun_3, control = c(fnscale = -1, maxit = 500))
+
+untransform_zeta(out$par, popsizes, ntests)
+```

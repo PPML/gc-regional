@@ -1,0 +1,652 @@
+---
+title: "Prevalence Outcomes"
+author: "Christian Testa"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+    %\VignetteIndexEntry{Prevalence Outcomes}
+    %\VignetteEngine{knitr::rmarkdown}
+    \usepackage[utf8]{inputenc}
+---
+
+This vignette will serve the purpose of standardizing our methodology
+for producing prevalence outcomes from the gcRegional model. 
+
+gcRegional uses MCMC to produce a distribution on the set of parameters that
+serve as input into the compartmental model of gonorrhea. This distribution is
+calibrated by MCMC to reflect the likelihood of given parameter values producing
+the observed data. To visualize the outcomes of this calibration, we sample from
+the posterior distribution to and simulate the outcomes of those choices of
+parameter values.
+
+The model is calibrated to observed data in the time period 2010-2016, after 
+which we employ several intervention scenarios to simulate how changes in 
+parameters which control the screening rates of specific populations affect
+the prevalence of gonorrhea in the models simulation of the 2017-2021 time
+period. 
+
+### Preparing Infection Data
+
+Before we can visualize the prevalence of the model, we have to collect
+data from model simulations varying the screening interventions and storing 
+the number infected in each compartment and the compartment size in each 
+year. 
+
+For each site, we will construct a dataframe with the columns:
+
+- intervention.id
+- simulation
+- population.id
+- year
+- n.infected
+- population.size
+
+First, let's get a calibration file to work with:
+
+```{r get calibration filepath}
+library(dplyr)
+
+# Get the most recent calibration file for site = "SF" or "BA"
+get_calibration_filepath <- function(site) {
+  calibration_file <-
+    system.file("data", package = 'gcRegional') %>%
+    list.files(full.names = T) %>%
+    grep(site, ., value=T) %>%
+    last
+  return(calibration_file)
+}
+```
+
+Next, we need to sample a set of parameter-vectors from the calibration.
+
+```{r sample theta}
+# Sample sample_size number of theta_values from the trace of the calibration.
+sample_calibration_trace <- function(
+  calibration_filepath,
+  burnin = 100,
+  sample_size = 100) {
+  
+  x <- load(calibration_filepath) # load data; return name of object
+  calibration <- get(x) # rename object -> "calibration"
+  trace <- calibration$trace # extract theta values as trace dataframe
+  trace <- trace[(burnin+1):nrow(trace), ] # 
+  trace_sample <- dplyr::sample_n(trace, sample_size) %>%
+    as.data.frame
+  return(trace_sample)
+}
+```
+
+Now I want to be able to count the number of infected individuals from each
+population given a vector of parameters.
+
+```{r simulate and record data}
+calculate_n_infected <- function(
+  theta,
+  years = 2010:2016,
+  interv = "base_case") {
+
+  prediction_epi(theta, interv) # run model simulation
+  sol <- gc_env$sol # record simulation output
+  year_rows <- years - 1941 # adjust years to match row-indices of output
+  y.index <- gc_env$y.index[1:28] # symptomatic infected
+  z.index <- gc_env$z.index[1:28] # asymptomatic infected
+  s.index <- gc_env$s.index[1:28] # susceptible, not-infected
+  nsa.index <- gc_env$nsa.index[1:28] # not sexually active
+
+  if (! all(year_rows %in% 1:nrow(sol))) # check that years are within simulation
+    stop("The specified years aren't within the range of the simulated data.
+    The values gc_env$cal.end and gc_env$model.end probably need to be updated.")
+
+  # sum number infected per population
+  n_infected <- sol[year_rows, 1+y.index] + sol[year_rows, 1+z.index]
+  # sum total population sizes
+  population_size <- n_infected + sol[year_rows, 1+s.index] + sol[year_rows, 1+nsa.index]
+
+  # Rename rows/columns properly
+  colnames(n_infected) <- 1:28
+  rownames(n_infected) <- years
+  colnames(population_size) <- 1:28
+  rownames(population_size) <- years
+
+  # Reshape n_infected
+  n_infected <- reshape2::melt(
+    n_infected,
+    varnames = c("year", "population.id"),
+    value.name = "n.infected")
+
+  # Reshape population_size
+  population_size <- reshape2::melt(
+    population_size,
+    varnames = c("year", "population.id"),
+    value.name = "population.size")
+
+  # Since n_infected and population_size were constructed with methods that will
+  # ensure their populations and years are in the same order, we can now take
+  # the population.size column and insert it into n_infected (or vice-versa) and
+  # return this as our output.
+  n_infected[['population.size']] <- population_size[['population.size']]
+  return(n_infected)
+}
+```
+
+Now that we have `calculate_n_infected`, we can run many simulations for each
+given intervention. 
+
+```{r collect many simulation results}
+collect_many_simulations_results <- function(
+  trace_sample,
+  years = 2010:2016,
+  interv = "base_case") {
+
+  result <- list()
+  for (i in 1:nrow(trace_sample)) {
+    # Get trace_sample[i, ] with correct names
+    theta <- setNames(as.numeric(trace_sample[i, ]), colnames(trace_sample))
+    # Save simulation results
+    result[[length(result)+1]] <- 
+      calculate_n_infected(theta, years = years, interv = interv)
+    # Add a simulation number column
+    result[[length(result)]][['simulation.n']] <- i
+  }
+  
+  # Concatenate each simulation's data and return
+  result <- do.call(rbind, result)
+  return(result)
+}
+```
+
+To save on file size, I will record simulation data from the
+base-case in the years 2010-2021 while for all other interventions I will record
+data only from 2017-2021 because the interventions start in 2016 and do not
+change the simulation results in the 2010-2016 period.
+
+To defend the claim that the 2010-2016 period data is the same regardless of 
+the intervention specified, we can check for a given vector of parameters that
+the simulation results are the same.
+
+```{r check preintervention equality}
+load_start("SF")
+intervention_ids <- names(gc_env$intervention_names)
+preintervention_period_is_unaffected <- length(unique(
+  lapply(intervention_ids, function(id) {
+    calculate_n_infected(theta = gc_env$theta, interv = id)
+  }))) == 1
+if (preintervention_period_is_unaffected) 
+  cat("Simulation results in the years 2010:2016 are consistently equal, 
+      independent of the intervention specified.")
+```
+
+
+Let's go ahead and collect data for each intervention. 
+
+```{r collect intervention data}
+simulate_intervention_results <- function(trace_sample) {
+  
+  gc_env$cal.end <- 80 # End of calibration period cpp 0 indexing
+  gc_env$model.end <- 81
+  
+  intervention_ids = c(
+    "base_case",
+    "high_activity_young_annual",
+    "high_activity_young_semi_annual",
+    "high_activity_young_quarter_annual",
+    "young_annual",
+    "young_semi_annual",
+    "young_quarter_annual",
+    "high_activity_MSM_annual",
+    "high_activity_MSM_semi_annual",
+    "high_activity_MSM_quarter_annual",
+    "MSM_annual",
+    "MSM_semi_annual",
+    "MSM_quarter_annual",
+    "high_activity_annual",
+    "high_activity_semi_annual",
+    "high_activity_quarter_annual",
+    "female_young_annual",
+    "female_young_semi_annual",
+    "female_young_quarter_annual"
+    )
+
+  result <- list()
+  
+  for (id in intervention_ids) {
+    # Set the years to be recorded according to the intervention
+    if (id == "1") years <- 2010:2021
+    else years <- 2017:2021
+    
+    # Record simulation results
+    result[[length(result)+1]] <- 
+      collect_many_simulations_results(
+        trace_sample = trace_sample,
+        years = years,
+        interv = id)
+    
+    # Add an intervention.id column
+    result[[length(result)]][['intervention.id']] <- id
+  }
+  
+  result <- do.call(rbind, result) %>% as.data.frame(., stringsAsFactors=FALSE)
+  
+  return(result)
+}
+```
+
+
+```{r generate data}
+simulate_intervention_results_at_both_sites <- function() {
+  results <- list()
+  for (site in c("SF", "BA")) {
+    load_start(site)
+    calibration_filepath <- get_calibration_filepath(site)
+    trace_sample <- sample_calibration_trace(calibration_filepath = calibration_filepath)
+    results[[site]] <- simulate_intervention_results(trace_sample)
+    results[[site]][['site']] <- site
+  }
+  results <- do.call(rbind, results) %>% as.data.frame(., stringsAsFactors=FALSE)
+  return(results)
+}
+```
+
+
+Now we're finally in a position to evaluate the function's we've constructed, and 
+we can store their results as a dataframe called `n_infected`. 
+```{r evaluate functions and save data}
+if (! exists("n_infected", where='package:gcRegional')) {
+  
+  n_infected <- simulate_intervention_results_at_both_sites()
+  
+  save(n_infected,
+       file = paste0(
+       "~/Documents/gc-regional/data/n_infected.rda"
+       ))
+}
+```
+
+
+
+### Manipulating Infection Data
+
+Since our model has 32 populations (which each have (symptomatic and
+asymptomatic) infected and susceptible individuals), in order to simplify the
+plots of prevalence/infections and other outputs we will need to be able to
+combine populations together (i.e. the old black and young black can be combined
+to form the Black population).
+
+```{r group populations}
+# This function will take a list of dimensions, convert them to their 
+# corresponding options with the popnames object, and then list the 
+# indices of the populations within each group. 
+
+group_populations <- function(
+  free_dims = c('demographic', 'sex', 'risk', 'age'),
+  fixed_dims = c()) {
+  
+  dim_ids <- c(
+    demographic = 'i',
+    sex = 'j',
+    risk = 'k',
+    age = 'l'
+  )
+  
+  dim_options <- list()
+  for (dim in free_dims) {
+    dim_options[[length(dim_options)+1]] <- 
+      gc_env$popnames[[dim_ids[[dim]]]]
+  }
+  for (dim in fixed_dims) {
+    dim_options[[length(dim_options)+1]] <-
+      dim
+  }
+  
+  dim_combinations <- purrr::cross(dim_options)
+  dim_combinations <- lapply(dim_combinations, as.character)
+  
+  groups <- list()
+  for (i in 1:length(dim_combinations)) {
+    groups[[paste(dim_combinations[[i]], collapse = " ")]] <-
+      pop_names_to_index(dim_combinations[[i]])
+  }
+  return(groups)
+}
+```
+
+Additionally, rather than having many simulations for every single year, we 
+would rather have mean values with 95% confidence intervals surrounding the
+mean-values in each year. 
+
+```{r calculating confidence}
+calculating_confidence <- function(n_infected, varname = 'n.infected', confidence = 0.95) {
+  
+  lower_bound <- (1 - confidence) / 2
+  upper_bound <- confidence + (1 - confidence) / 2
+  
+  results <- list()
+  for (individual_year in unique(n_infected$year)) {
+    for (interv in unique(n_infected$intervention.id)) {
+      for (individual_site in unique(n_infected$site)) {
+        for (pop in unique(n_infected$population.id)) {
+        
+          filtered_df <-
+            filter(n_infected,
+            year == individual_year,
+            population.id == pop,
+            site == individual_site,
+            intervention.id == interv)
+          
+          if (nrow(filtered_df) > 0) {
+            mean <- mean(filtered_df[[varname]], na.rm = T)
+            ci_high <- quantile(filtered_df[[varname]], upper_bound, na.rm = T)
+            ci_low <- quantile(filtered_df[[varname]], lower_bound, na.rm = T)
+            population.size <- mean(filtered_df[['population.size']], na.rm = T)
+            
+            results[[length(results)+1]] <- c(
+              year = individual_year,
+              intervention.id = interv,
+              site = individual_site,
+              population.id = pop,
+              mean = mean,
+              ci_high = ci_high,
+              ci_low = ci_low,
+              population.size = population.size
+            )
+          }
+        }
+      }
+    }
+  }
+  
+  results <- do.call(rbind, results) %>% as.data.frame(., stringsAsFactors=FALSE)
+  return(results)
+}
+```
+
+Let's go ahead and save some confidence data so that this vignette doesn't have
+to calculate the confidence every time it renders. 
+
+```{r saving confidence}
+if (! exists('n_infected_confidence', where = 'package:gcRegional')) {
+  n_infected_confidence <- calculating_confidence(n_infected, varname = 'n.infected')
+  save(n_infected_confidence, file="~/Documents/gc-regional/data/n_infected_confidence.rda")
+}
+```
+
+Now that we can group the populations and we have our mean-values for 
+cases and prevalence with confidence intervals, we will want to be able
+to regroup the populations and sum their mean case counts, prevalence rates,
+and those values' confidence intervals.
+
+```{r combining populations into groups with confidence}
+
+combine_populations_with_confidence <- function(
+  df,
+  grouping = group_populations()
+) {
+  
+  results <- list()
+  for (sitex in unique(df$site)) {
+    for (interv in unique(df$intervention.id)) {
+      for (yearx in unique(df$year)) {
+        for (i in 1:length(grouping)) {
+          group <- grouping[[i]]
+          
+          filtered_df <- filter(
+            df,
+            year == yearx,
+            site == sitex,
+            intervention.id == interv,
+            population.id %in% group
+          )
+          
+          if ( nrow(filtered_df) > 0 ) {
+            meanx <- sum(as.numeric(filtered_df$mean))
+            ci_high <- sum(as.numeric(filtered_df$`ci_high.97.5%`))
+            ci_low <- sum(as.numeric(filtered_df$`ci_low.2.5%`))
+            popsize <- sum(as.numeric(filtered_df$population.size))
+            
+            results[[length(results)+1]] <- 
+              list(
+                year = yearx, 
+                site = sitex,
+                intervention.id = interv,
+                population.name = names(grouping)[[i]],
+                mean = meanx,
+                ci_high = ci_high,
+                ci_low = ci_low,
+                population.size = popsize
+              )
+          }
+        }
+      }
+    }
+  }
+  
+  results <- do.call(rbind, results) %>% as.data.frame(., stringsAsFactors=F)
+  return(results)
+}
+
+
+```
+
+Since only the base case includes the data from the 2010:2016 period, we need
+a function which will copy the base-case years into data that looks like 
+another intervention for 2010:2016, and then group the populations together.
+
+```{r prepare intervention data}
+coerce_df_coltypes <- function(df, types) {
+  typenames <- names(types)
+  if (! is.null(typenames) && length(typenames) == length(types)) {
+    if (! all(typenames %in% colnames(df))) stop("the names of types must be colnames of df.")
+    for (i in seq(types)) {
+      df[[typenames[[i]]]] <- as(df[[typenames[[i]]]], types[[i]])
+    }
+  } else {
+    if (length(types) > ncol(df)) stop("the length of types must be less than ncol(df).")
+    for (i in seq(types)) {
+      type <- types[[i]]
+      df[[i]] <- as(df[[i]], type)
+    }
+  }
+  return(df)
+}
+
+
+
+prepare_intervention_data <- function(
+  df,
+  city = "SF",
+  intervention = "1",
+  years = 2010:2021,
+  free_dimensions = c("demographic", "age", "sex", "risk"),
+  fixed_dimensions = c()
+) {
+  
+  # Filter our dataframe for only the intervention, site, and years 
+  # we're interested in.
+  filtered_df <- filter(
+    df,
+    site == city,
+    year %in% years,
+    intervention.id == intervention)
+  
+  # Since only the Base Case is saved for 2010:2016, if any of the 
+  # years of interest are in 2010:2016, grab those separately and 
+  # add them to the filtered_df. 
+  if (intervention != "1") {
+    base_case_years <- dplyr::intersect(2000:2016, years)
+    if ( length(base_case_years) > 0 ) {
+      base_case_df <- filter(
+        df,
+        site == city,
+        year %in% base_case_years,
+        intervention.id == "1")
+      base_case_df[['intervention.id']] <- intervention
+      filtered_df <- rbind(base_case_df, filtered_df, stringsAsFactors=F) %>% 
+        as.data.frame
+    }
+  }
+  
+  # Index the groups
+  grouping <- group_populations(free_dims = free_dimensions,
+                                fixed_dims = fixed_dimensions)
+    
+  # Group and sum the data
+  filtered_df <- combine_populations_with_confidence(filtered_df, grouping = grouping)
+  
+  # Remove Female MSM
+  female_msm_rows <-
+    which(sapply(filtered_df[['population.name']], function(x)
+    grepl('Female', x) && grepl('MSM', x)))
+  if (length(female_msm_rows) > 0)
+    filtered_df <- filtered_df[-female_msm_rows, ]
+  
+  # filtered_df$population.name <- as.character(filtered_df$population.name)
+  # filtered_df$intervention.id <- as.character(filtered_df$intervention.id)
+  # filtered_df$mean <- as.numeric(filtered_df$mean)
+  # filtered_df$year <- as.integer(filtered_df$year)
+  # filtered_df$`ci_high` <- as.numeric(filtered_df$`ci_high`)
+  # filtered_df$`ci_low` <- as.numeric(filtered_df$`ci_low`)
+  # filtered_df$population.size <- as.numeric(filtered_df$population.size)
+  
+  filtered_df <- coerce_df_coltypes(filtered_df, 
+                                    c(year = 'integer', 
+                                      mean = 'numeric',
+                                      population.name = 'character',
+                                      intervention.id = 'integer',
+                                      ci_high = 'numeric',
+                                      ci_low = 'numeric',
+                                      population.size = 'numeric'))
+  
+  return(filtered_df)
+}
+```
+
+
+### Visualizing Infection Data
+
+Now we can go ahead and make the most basic of visualizations: A specific
+intervention, visualized in either city, for a specific range of years,
+with a specified population grouping. 
+
+```{r some plots}
+library(ggplot2)
+
+make_intervention_plot <- function(
+  cases_or_prevalence = 'cases',
+  site = "SF",
+  years = 2010:2016,
+  intervention = "1",
+  free_dimensions = c("demographic", "sex"),
+  fixed_dimensions = c()) {
+  
+  if (! cases_or_prevalence %in% c('cases', 'prevalence')) 
+    stop("cases_or_prevalence argument must be either 'cases' or 'prevalence'.")
+  
+  site_names <- c(
+    "SF" = "San Francisco",
+    "BA" = "Baltimore")
+  
+  intervention_names <- c(
+    '1' = "Base Case",
+    "2b" = "Focused Young - Annual Screening",
+    "2a" = "Focused Young - Semi-Annual Screening",
+    "3a" = "Focused Young - Quarter-Annual Screening",
+    "4a" = "All High Risk - Annual Screening",
+    "5a" = "Focused MSM - Semi-Annual Screening",
+    "6a" = "Focused MSM - Quarter-Annual Screening",
+    "7" = "All MSM - Annual Screening",
+    "8" = "All MSM - Semi-Annual Screening",
+    "9" = "All MSM - Quarter-Annual Screening"
+  )
+  
+  df <- get("n_infected_confidence")
+  
+  df <- prepare_intervention_data(
+    df = df, city = site, intervention = intervention, 
+    years = years,
+    free_dimensions = free_dimensions,
+    fixed_dimensions = fixed_dimensions)
+  
+  if (cases_or_prevalence == 'prevalence') {
+    df$mean <- df$mean / df$population.size * 100
+    df$ci_high <- df$ci_high / df$population.size * 100
+    df$ci_low <- df$ci_low / df$population.size * 100
+  }
+  
+  g <- ggplot(df, aes(x=year, y=mean, color=population.name)) + 
+    geom_line() + 
+    geom_ribbon(aes(ymin = ci_low, ymax=ci_high, fill=population.name), color=NA, alpha=0.3) + 
+    ggtitle(paste0(
+      ifelse(cases_or_prevalence == 'cases',
+             'Number of Cases in ',
+             'Prevalence rates in '),
+      site_names[[site]],
+      " - ",
+      intervention_names[[intervention]])) + 
+    ylab(ifelse(cases_or_prevalence == 'cases',
+                'Number of Infections', 'Prevalence %'))
+  
+  return(g)
+}
+
+
+
+# df <- prepare_intervention_data(
+#   df = n_infected_confidence, city = "BA", intervention = '1',
+#   fixed_dimensions = c(demographic="Black", age="Young", sex="Female"))
+# 
+# ggplot(df, aes(x=year, y=mean / population.size, color=population.name)) + 
+#   geom_line() + 
+#   geom_ribbon(aes(ymin = ci_low / population.size, ymax=ci_high / population.size, fill=population.name), color=NA, alpha=0.3) + 
+#   ggtitle("Number of Cases in Baltimore - Base Case Scenario")
+
+
+
+# make_intervention_plot(site = "BA", cases_or_prevalence = "prevalence",
+#                        intervention = '1',
+#                        years = 2000:2021,
+#                        free_dimensions = c(),
+#                        fixed_dimensions = c(age='Young', demographic='Black', sex='Female'))
+# 
+# 
+# make_intervention_plot(site = "SF", cases_or_prevalence = "prevalence",
+#                        intervention = '1',
+#                        free_dimensions = c('demographic', 'age'),
+#                        fixed_dimensions = c())
+# 
+# 
+# make_intervention_plot(site = "BA", cases_or_prevalence = "prevalence",
+#                        intervention = '1',
+#                        free_dimensions = c('risk', 'age'),
+#                        fixed_dimensions = c('Black'))
+
+library(ggplot2)
+
+g <- make_intervention_plot(site = "BA", cases_or_prevalence = "prevalence",
+                       intervention = 'base_case',
+                       years = 2000:2021,
+                       free_dimensions = c(),
+                       fixed_dimensions = c(demographic='Black', sex='Female'))
+
+h <- make_intervention_plot(site = "BA", cases_or_prevalence = "prevalence",
+                       intervention = 'base_case',
+                       years = 2000:2021,
+                       free_dimensions = c(),
+                       fixed_dimensions = c(demographic='MSM'))
+
+i <- make_intervention_plot(site = "BA", cases_or_prevalence = "prevalence",
+                       intervention = 'base_case',
+                       years = 2000:2021,
+                       free_dimensions = c(),
+                       fixed_dimensions = c(demographic='Black', sex='Male'))
+
+
+dat <- dplyr::bind_rows(g$data, h$data, i$data)
+
+
+ggplot(dat, aes(x=year, y=mean, ymax=ci_high, ymin=ci_low, color=population.name)) + 
+  geom_ribbon(aes(fill=population.name), color=NA, alpha=0.4) + 
+  geom_line() + ylab("cases") + ggtitle("Prevalence in Baltimore") + 
+  scale_x_continuous(name = 'year', 2000:2021) + theme(axis.text.x = element_text(angle=90))
+
+```
+

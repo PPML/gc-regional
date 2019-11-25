@@ -1,0 +1,72 @@
+---
+title: Mobile Outreach Sensitivity Analysis Figures
+author: Christian Testa
+output: html_document
+---
+
+```{r}
+devtools::load_all()
+```
+
+
+```{r}
+library(here)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+
+mobile_ba <- readRDS(here("analysis/mobile_outreach_sensitivity_analysis/interventions_data_mobile_outreach_sensitivity_BA_fixed.rds"))
+mobile_sf <- readRDS(here("analysis/mobile_outreach_sensitivity_analysis/interventions_data_mobile_outreach_sensitivity_SF_fixed.rds"))
+
+mobile_ba$site <- 'BA'
+mobile_sf$site <- 'SF'
+
+last_ba_year <- max(mobile_ba$year)
+last_sf_year <- max(mobile_sf$year)
+
+mobile_ba %<>% filter(year == last_ba_year, population == 'All') %>% select(-population)
+mobile_sf %<>% filter(year == last_sf_year, population == 'All') %>% select(-population)
+
+df <- rbind.data.frame(mobile_ba, mobile_sf)
+basecase_df <- df %>% filter(interv == 'base_case')
+interv_df <- df %>% filter(interv != 'base_case')
+compare_df <- merge(interv_df, basecase_df, by = c('sim', 'site', 'year'),
+  suffixes = c('', '.basecase'))
+```
+
+```{r calculate additional tests}
+compare_df %<>% 
+  mutate(additional_tests.frc = (number_screened - number_screened.basecase) / (number_screened.basecase))
+```
+
+```{r add human readable text}
+compare_df$site %<>% recode(SF = 'San Francisco', BA = 'Baltimore')
+
+.construct_interventions_description_df()
+
+compare_df %<>% merge(intervention_descriptions, by.x = 'interv', by.y = 'shortnames')
+```
+
+```{r plot additional tests by intervention}
+ggplot(filter(compare_df, interv %in% c('1year_high_activity_semi_annual_4_10th_hr_pt111_lr', '1year_high_activity_semi_annual_2_10th_hr_pt133_lr', '1year_high_activity_semi_annual_5_10th_hr_pt1_lr')), 
+       aes(x = names, y = additional_tests.frc*100)) + 
+  geom_jitter(alpha = 0.5, mapping = aes(color = interv)) + 
+  geom_boxplot(alpha = 0.5, outlier.shape=NA) + 
+  facet_wrap(~site) +
+  coord_flip() + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  ggtitle("Additional Tests (%) in Mobile Outreach Sensitivity Analysis") + 
+  ylab("Additional Tests (%)") + 
+  xlab("") + 
+  expand_limits(y = 0) + 
+  scale_color_manual(values = setNames(colorspace::lighten(intervention_descriptions$color,.5), intervention_descriptions$shortnames)) 
+
+
+ggsave(file.path(system.file("intervention_analysis/", package='gcRegional'), 
+                 'mobile_outreach_sensitivity_additional_tests.png'),
+  width = 8, height = 3)
+```
+
+
+

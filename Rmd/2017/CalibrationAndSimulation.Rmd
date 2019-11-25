@@ -1,0 +1,104 @@
+---
+title: "Calibration and Simulation"
+author: "Christian Testa"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+    %\VignetteIndexEntry{Calibration and Simulation}
+    %\VignetteEngine{knitr::rmarkdown}
+    \usepackage[utf8]{inputenc}
+---
+
+This vignette is a guide to using the gc-regional package to create predictions
+for the prevalence of gonorrhea in Baltimore or San Francisco.
+
+First, we need to install. 
+Since the package is hosted in a private repository on the PPML team's organization page, 
+installation through devtools' install_github command requires an additional argument:
+`auth_token`, which can be retrieved from GitHub. 
+
+```{r, eval=FALSE}
+devtools::install_github("ppml/gc-regional",
+                         ref = "R-package",
+                         auth_token = insert_auth_token_in_quotes_here)
+```
+
+Now we can load the package.
+```{r}
+library(gcRegional)
+```
+
+The next step is to load the parameters necessary for the desired site. 
+To do this we run the `load_start()` function, which can be passed
+the parameter `site`, or if `site` is missing as an argument the function 
+will ask the user to enter the site. 
+
+```{r}
+load_start(site = "BA")
+# OR
+# load_start(site = "SF")
+```
+
+Let's go ahead and retrieve our vector of initial starting parameter values, `theta`,
+the vector of standard deviations for each of our prior distributions, `sd.prior`, 
+and then let's run Monte Carlo Markov Chain inference to learn posterior distributions
+for each of our model parameters. 
+
+```{r, R.options=list(max.print=10)}
+#########################################
+### to run/check the calibration code ###
+#########################################
+
+# dLogPosterior is the target required by the myMCMC function in the fitR
+# package, init.theta=starting values of parameters, proposal.sd = initial guess
+# for SD of parameters, n.iterations = number of iterations to run MCMC for
+
+theta <- gc_env$theta
+sd.prior <- gc_env$sd.prior
+mcmc_test<-my_mcmc(target = dLogPosterior, init.theta = theta, proposal.sd = sd.prior/100, n.iterations = 10)
+```
+
+
+The following code block demonstrates how we can save data from our Monte Carlo
+Markov Chain (MCMC) parameter inference algorithm.
+```{r}
+# Optionally the output_directory below can be replaced with a more accessible
+# location, like "~/Documents/gcRegional_outputs" or something similar.
+output_directory <- file.path(tempdir(), "gcRegional_outputs")
+if (!dir.exists(output_directory)) dir.create(output_directory)
+test_filepath = file.path(output_directory, paste("mcmc_test", Sys.time()))
+save(mcmc_test, file=test_filepath)
+print(test_filepath)
+```
+
+
+If running diagnostics or analysis on the saved MCMC data, make sure the correct
+site parameters are loaded into the environment by running load_start with the
+site matching the saved data.
+```{r, echo=FALSE}
+library(ggplot2) 
+library(grid)
+library(gridExtra)
+library(reshape2)
+```
+```{r, R.options=list(max.print=10)}
+site_in_filepath <- ifelse(grepl("BA", test_filepath), "BA", "SF")
+if (gc_env$site != site_in_filepath) load_start(site_in_filepath)
+
+x <- load(test_filepath)
+mcmc_test <- get(x); rm(x)
+
+my_trace<-coda::mcmc(mcmc_test$trace)
+
+1-coda::rejectionRate(my_trace)
+lattice::xyplot(my_trace[, 1:10])
+trace.burn <- fitR::burnAndThin(my_trace, burn=4)
+trace.burn.thin <- fitR::burnAndThin(my_trace, thin=60)
+
+post.sample <- model_fits(trace.burn, sample.size=100)
+pred <- as.data.frame(post.sample$outputs)
+gc_assign(pred)
+theta.list <- as.data.frame(post.sample$theta.list)
+plot_posteriors(output_directory = output_directory)
+
+```

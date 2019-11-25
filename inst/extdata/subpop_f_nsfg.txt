@@ -1,0 +1,1 @@
+F	Black	Other	Hispanic	lcl	ucl	varBlack	0.89	0.05	0.06	0.84	0.925	0.000473469Other	0.05	0.86	0.09	0.83	0.89	0.000234774Hispanic	0.09	0.29	0.63	0.55	0.7	0.00146857

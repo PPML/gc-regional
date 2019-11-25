@@ -1,0 +1,257 @@
+---
+title: Debugging the Mobile Outreach Sensitivity Analysis
+author: Christian Testa
+output: 
+    html_document:
+        toc: true
+        toc_float: true
+---
+
+<style type="text/css">
+
+body, td {
+font-size: 14px;
+}
+code.r{
+font-size: 10px;
+}
+pre {
+font-size: 10px
+}
+</style>
+
+
+### Introduction
+
+We will take a look in this document at how the mobile outreach 
+interventions are implemented, their contrasting results, 
+and why they differ when it seems they shouldn't.
+
+### Comparing Locally-Run Simulations
+
+#### Baltimore
+
+```{r, cache=TRUE}
+devtools::load_all() # load gcRegional
+
+# Setup for Baltimore
+load_start('BA')
+theta <- gc_env$theta
+
+# Set up the basecase, mobile testing outreach, the re-implemented version, and one different mobile outreach sensitivity scenario
+e1 <- create_gcSim_param_env(theta)
+e2 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual')
+e3 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_5_10th_hr_pt1_lr')
+e4 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_4_10th_hr_pt111_lr')
+
+# Compare the screening matrices produced
+print(identical(e2$params$screen, e3$params$screen)) # should be the same for orig mobile outreach & re-implemented
+print(! identical(e2$params$screen, e4$params$screen)) # should be different for orig mobile outreach vs. sensitivity scenario
+
+# Run each
+e1 <- run_gcSim_with_environment(e1)
+e2 <- run_gcSim_with_environment(e2)
+e3 <- run_gcSim_with_environment(e3)
+e4 <- run_gcSim_with_environment(e4)
+
+# Get results
+e1_out <- e1$out.cpp$out
+e2_out <- e2$out.cpp$out
+e3_out <- e3$out.cpp$out
+e4_out <- e4$out.cpp$out
+
+# Prevalence Computer
+prevalence_last_year <- function(x) { sum(x[nrow(x), 1 + c(gc_env$y.index, gc_env$z.index)]) / sum(x[nrow(x), 1 + c(gc_env$s.index, gc_env$y.index, gc_env$z.index)]) }
+
+# Prevalence Levels in last year
+sapply(list(e1_out, e2_out, e3_out, e4_out), prevalence_last_year)
+
+# base case & mobile outreach should not match
+print(! identical(
+  prevalence_last_year(e1_out),
+  prevalence_last_year(e2_out)))
+
+# Orig mobile outreach & re-implemented should match
+print(identical(
+  prevalence_last_year(e2_out),
+  prevalence_last_year(e3_out)))
+
+# Orig mobile outreach & sensitivity mobile outreach should not match
+print(! identical(
+  prevalence_last_year(e2_out),
+  prevalence_last_year(e4_out)))
+
+
+# Setup for San Francisco
+```
+
+#### San Francisco
+
+```{r, cache=TRUE}
+load_start('SF')
+theta <- gc_env$theta
+
+# Set up the basecase, mobile testing outreach, the re-implemented version, and one different mobile outreach sensitivity scenario
+e1 <- create_gcSim_param_env(theta)
+e2 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual')
+e3 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_5_10th_hr_pt1_lr')
+e4 <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_4_10th_hr_pt111_lr')
+
+# Compare the screening matrices produced
+print(identical(e2$params$screen, e3$params$screen))
+print(! identical(e2$params$screen, e4$params$screen))
+
+# Run each
+e1 <- run_gcSim_with_environment(e1)
+e2 <- run_gcSim_with_environment(e2)
+e3 <- run_gcSim_with_environment(e3)
+e4 <- run_gcSim_with_environment(e4)
+
+# Get results
+e1_out <- e1$out.cpp$out
+e2_out <- e2$out.cpp$out
+e3_out <- e3$out.cpp$out
+e4_out <- e4$out.cpp$out
+
+# Prevalence Computer
+prevalence_last_year <- function(x) { sum(x[nrow(x), 1 + c(gc_env$y.index, gc_env$z.index)]) / sum(x[nrow(x), 1 + c(gc_env$s.index, gc_env$y.index, gc_env$z.index)]) }
+
+# Prevalence Levels in last year
+sapply(list(e1_out, e2_out, e3_out, e4_out), prevalence_last_year)
+
+# base case & mobile outreach should not match
+print(! identical(
+  prevalence_last_year(e1_out),
+  prevalence_last_year(e2_out)))
+
+# Orig mobile outreach & re-implemented should match
+print(identical(
+  prevalence_last_year(e2_out),
+  prevalence_last_year(e3_out)))
+
+# Orig mobile outreach & sensitivity mobile outreach should not match
+print(! identical(
+  prevalence_last_year(e2_out),
+  prevalence_last_year(e4_out)))
+```
+
+### Conclusions
+
+What did we learn? 
+
+The original mobile outreach and the re-implemented version match in their
+screening matrix and prevalence outcome on my computer for one simulation in
+both Baltimore and San Francisco. 
+
+Additionally, the sensitivity scenario (which differs in in its high-actvity
+targeting effectivity from the original mobile outreach scenario) differs in
+its screening matrix constructed and prevalence level in the last year. 
+
+Where else could the problem be? 
+
+- In the plotting code
+- In the simulation data (suggesting:) 
+- On the cluster
+- The wrong trace was used
+
+### Inspecting Simulation Data
+
+Hypothesis: Maybe there's a lot of simulations which failed for 
+apparently random reasons?
+
+#### Baltimore
+
+```{r, cache=TRUE}
+
+  intervention_sensitivity_df_ba <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_BA2.rds'))
+  
+  # what fraction of the SF data is NA?
+  length(which(apply(intervention_sensitivity_df_ba, 1, function(x) any(is.na(x))))) / 
+    nrow(intervention_sensitivity_df_ba)
+
+  # let's take a look at those
+  tibble::glimpse(
+    intervention_sensitivity_df_ba[
+      apply(intervention_sensitivity_df_ba, 1, 
+            function(x) any(is.na(x))), ])
+
+```
+
+Do those simulations fail locally? 
+
+```{r}
+# site <- "BA"
+# 
+# trace <- switch(
+#   site,
+#   BA = as.data.frame(readRDS(system.file("calibration_outcomes/BA_posterior_sample.rds", package = "gcRegional"))$theta.list),
+#   SF = as.data.frame(readRDS(system.file("calibration_outcomes/SF_posterior_sample.rds", package = "gcRegional"))$theta.list)
+# )
+# 
+# theta <- unlist(trace[25,])
+# 
+# e <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_2_10th_hr_pt133_lr')
+# e <- run_gcSim_with_environment(e)
+# any(is.na(e$out.cpp$out))
+```
+
+
+#### San Francisco 
+
+```{r, cache=TRUE}
+
+  # intervention_sensitivity_df_ba <- readRDS(
+  #   file.path(
+  #   system.file('intervention_analysis/', package='gcRegional'),
+  #   'interventions_data_mobile_outreach_sensitivity_BA2.rds'))
+  
+  intervention_sensitivity_df_sf <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_SF2.rds'))
+
+  # what fraction of the SF data is NA?
+  length(which(apply(intervention_sensitivity_df_sf, 1, function(x) any(is.na(x))))) / 
+    nrow(intervention_sensitivity_df_sf)
+
+  # let's take a look at those
+  tibble::glimpse(
+    intervention_sensitivity_df_sf[
+      apply(intervention_sensitivity_df_sf, 1, 
+            function(x) any(is.na(x))), ])
+
+```
+
+Do those simulations fail locally? 
+
+```{r, cache=TRUE}
+site <- "SF"
+load_start(site)
+
+trace <- switch(
+  site,
+  BA = as.data.frame(readRDS(system.file("calibration_outcomes/BA_posterior_sample.rds", package = "gcRegional"))$theta.list),
+  SF = as.data.frame(readRDS(system.file("calibration_outcomes/SF_posterior_sample.rds", package = "gcRegional"))$theta.list)
+)
+
+theta <- unlist(trace[25,])
+
+e <- create_gcSim_param_env(theta, interv = 'base_case')
+e <- run_gcSim_with_environment(e)
+any(is.na(e$out.cpp$out))
+
+e <- create_gcSim_param_env(theta, interv = '1year_high_activity_semi_annual_2_10th_hr_pt133_lr')
+e <- run_gcSim_with_environment(e)
+any(is.na(e$out.cpp$out))
+
+
+```
+
+Even if the NAs explained why San Francisco's intervention outcomes mostly looked like the base case, 
+that wouldn't explain why the outcomes are different for Baltimore between the Mobile Outreach Testing 
+and the re-implementation of the same intervention.
+
+What about in the original interventions data set? 

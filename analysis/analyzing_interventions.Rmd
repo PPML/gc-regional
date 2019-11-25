@@ -1,0 +1,505 @@
+---
+title: analyzing intervention simulation outcomes
+output: html_document
+---
+
+We have simulated a variety of scenarios and now would 
+like to analyze the outcomes from those simulations. 
+
+First we load our simulation data. 
+
+```{r get sim data, cache=T, echo=F}
+devtools::load_all(".")
+interventions_sf <- readRDS(system.file(package = 'gcRegional', 'intervention_simulations/interventions_data_SF.rds'))
+interventions_ba <- readRDS(system.file(package = 'gcRegional', 'intervention_simulations/interventions_data_BA.rds'))
+```
+
+```{r print summary, cache=T}
+names(interventions_ba)
+unique(interventions_ba$variable)
+```
+
+
+The first plot I want to create is the following: 
+
+
+| cases averted | number needed to screen to avert one case (nns) | 
+|--|--|
+| (horizontal bar with boxplot) | (horizontal bar with boxplot) |
+
+
+The formulas for these are: 
+
+`cases averted = basecase infections - intervention infections`
+
+`nns = additional tests / cases averted`
+
+`additional tests = number of tests in intervention - base case number of tests`
+
+It must be kept in mind that these must be for a specific parameter vector from
+the sample from the posterior distribution reflecting the models fit. 
+
+This is the data frame I'll construct next: 
+
+| sim | site| cases averted | additional tests | nns | 
+|--|--|--|--|--|
+|(data)|(data)|(data)|(data)|(data)|
+
+!!! I'm realizing that I really should have included ALL individuals as one of the 
+populations in the outcomes. 
+
+Also, we're going to make these units relative rather than absolute.
+
+
+```{r compute intermediate values, cache=T}
+interventions <- setdiff(unique(interventions_ba$interv), 'base_case')
+
+results_data <- list()
+
+interventions_ba_filtered <- interventions_ba[interventions_ba$year == max(interventions_ba$year) & 
+                                       interventions_ba$variable %in% c('incident_cases', 'number_screened') & 
+                                       interventions_ba$population %in% c('Male', 'Female'),]
+
+interventions_sf_filtered <- interventions_sf[interventions_sf$year == max(interventions_sf$year) & 
+                                       interventions_sf$variable %in% c('incident_cases', 'number_screened') & 
+                                       interventions_sf$population %in% c('Male', 'Female'),]
+
+for (site in c("SF", "BA")) {
+  df <- switch(site, SF = interventions_sf_filtered, BA=interventions_ba_filtered)
+  for (sim in 1:max(interventions_ba_filtered$sim)) {
+    for (interv in interventions) {
+      
+      # compute necessary intermediate values
+      # computing cases_averted
+      male_cases_in_interv = df[df$sim == sim &
+                                  df$variable == 'incident_cases' &
+                                  df$interv == interv &
+                                  df$year == max(df$year) & df$population == 'Male', 'value']
+      female_cases_in_interv = df[df$sim == sim &
+                                  df$variable == 'incident_cases' &
+                                  df$interv == interv &
+                                  df$year == max(df$year) & df$population == 'Female', 'value']
+      male_cases_in_base_case = df[df$sim == sim &
+                                  df$variable == 'incident_cases' &
+                                  df$interv == 'base_case' &
+                                  df$year == max(df$year) & df$population == 'Male', 'value']
+      female_cases_in_base_case = df[df$sim == sim &
+                                  df$variable == 'incident_cases' &
+                                  df$interv == 'base_case' &
+                                  df$year == max(df$year) & df$population == 'Female', 'value']
+      
+      cases_averted = ((male_cases_in_base_case + female_cases_in_base_case) - 
+        (male_cases_in_interv + female_cases_in_interv)) / (male_cases_in_base_case + female_cases_in_base_case)
+      
+      # computing number of additional tests
+      male_number_screened_in_interv = df[df$sim == sim &
+                                  df$variable == 'number_screened' &
+                                  df$interv == interv &
+                                  df$year == max(df$year) & df$population == 'Male', 'value']
+      female_number_screened_in_interv = df[df$sim == sim &
+                                  df$variable == 'number_screened' &
+                                  df$interv == interv &
+                                  df$year == max(df$year) & df$population == 'Female', 'value']
+      male_number_screened_in_base_case = df[df$sim == sim &
+                                  df$variable == 'number_screened' &
+                                  df$interv == 'base_case' &
+                                  df$year == max(df$year) & df$population == 'Male', 'value']
+      female_number_screened_in_base_case = df[df$sim == sim &
+                                  df$variable == 'number_screened' &
+                                  df$interv == 'base_case' &
+                                  df$year == max(df$year) & df$population == 'Female', 'value']
+      
+      additional_screens <- ((male_number_screened_in_interv + female_number_screened_in_interv) - 
+        (male_number_screened_in_base_case + female_number_screened_in_base_case)) / 
+        (male_number_screened_in_base_case + female_number_screened_in_base_case)
+      
+      # nns
+      # nns <- additional_screens / cases_averted
+      
+      results_data[[length(results_data)+1]] = 
+        list(
+          sim = sim,
+          site = site,
+          interv = interv,
+          cases_averted = cases_averted, 
+          additional_tests = additional_screens
+          # nns = nns
+        )
+    }
+  }
+}
+
+intervention_results <- do.call(rbind.data.frame, results_data)
+saveRDS(intervention_results, file.path(system.file("intervention_simulations", package = 'gcRegional'), 'intervention_results.rds'))
+```
+
+
+```{r, cache = T}
+intervention_results <- intervention_results[complete.cases(intervention_results), ]
+```
+
+```{r, summarize}
+ir_summary <- group_by(intervention_results, site, interv) %>% 
+  summarize(
+    ci_high_cases_averted = quantile(cases_averted, .975),
+    iq_high_cases_averted = quantile(cases_averted, .75),
+    median_cases_averted = median(cases_averted),
+    iq_low_cases_averted = quantile(cases_averted, .25),
+    ci_low_cases_averted = quantile(cases_averted, .025),
+    # ci_high_nns = quantile(nns, 0.975),
+    # iq_high_nns = quantile(nns, 0.75),
+    # median_nns = median(nns),
+    # iq_low_nns = quantile(nns, 0.25),
+    # ci_low_nns = quantile(nns, 0.025),
+    ci_high_tests = quantile(additional_tests, 0.975),
+    iq_high_tests = quantile(additional_tests, 0.75),
+    median_tests = median(additional_tests),
+    iq_low_tests = quantile(additional_tests, 0.25),
+    ci_low_tests = quantile(additional_tests, 0.025)
+  )
+
+intervention_results$site <- ifelse(intervention_results$site == 'SF', 'San Francisco', 'Baltimore')
+ir_summary$site <- ifelse(ir_summary$site == 'SF', 'San Francisco', 'Baltimore')
+
+```
+
+```{r plot cases averted by additional tests per intervention}
+library(ggplot2)
+
+
+ggplot(ir_summary) + 
+  geom_boxplot(stat = 'identity', aes(x = interv, ymax = ci_high_cases_averted, upper = iq_high_cases_averted, middle = median_cases_averted, lower = iq_low_cases_averted, ymin = ci_low_cases_averted)) + 
+  ggtitle("Number of Cases Averted After 5 Years by Intervention") + 
+  geom_hline(yintercept = 0, linetype ='dashed', color = 'red', alpha = 0.5) +
+  facet_wrap(~site) + 
+  coord_flip()  
+ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted.png'), width=unit(10, 'in'), height=unit(7,'in'), dpi=300)
+
+# ggplot(ir_summary) + 
+#   geom_boxplot(stat = 'identity', aes(x = interv, ymax = ci_high_nns, upper = iq_high_nns, middle = median_nns, lower = iq_low_nns, ymin = ci_low_nns)) + 
+#   ggtitle("Number Needed to Screen to Avert 1 Case over 5 Years by Intervention") + 
+#   facet_wrap(~site) + 
+#   coord_flip() 
+# ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'nns_all.png'), width=unit(10, 'in'), height=unit(7,'in'), dpi=300)
+# 
+# ggplot(ir_summary) + 
+#   geom_boxplot(stat = 'identity', aes(x = interv, ymax = ci_high_nns, upper = iq_high_nns, middle = median_nns, lower = iq_low_nns, ymin = ci_low_nns)) + 
+#   ggtitle("Number Needed to Screen to Avert a Case over 5 Years by Intervention") + 
+#   facet_wrap(~site) + 
+#   scale_y_log10(c(1,4000)) +
+#   coord_flip()
+
+# ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'nns_logscale.png'), width=unit(10, 'in'), height=unit(7,'in'), dpi=300)
+
+library(ggrepel)
+
+
+ggplot(filter(intervention_results, site == 'Baltimore'), aes(x=additional_tests, y=cases_averted, color = interv)) + 
+  geom_point(alpha=0.5) +
+  ggrepel::geom_label_repel(
+    data = filter(ir_summary, site == 'Baltimore'),
+    mapping = aes(
+      group = interv,
+      x = median_tests,
+      y = median_cases_averted,
+      label = interv),
+    size = 3,
+    alpha = 0.7
+  ) +
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), legend.position = 'none',
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + 
+  geom_hline(yintercept = 0, color = 'red', linetype='dashed', alpha=0.8) + 
+  ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'in Baltimore')
+
+ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_num_tests_ba.png'), width=unit(14, 'in'), height=unit(10,'in'), dpi=300)
+
+ggplot(filter(intervention_results, site == 'San Francisco'), aes(x=additional_tests, y=cases_averted, color = interv)) + 
+  geom_point(alpha=0.5) +
+  ggrepel::geom_label_repel(
+    data = filter(ir_summary, site == 'San Francisco'),
+    mapping = aes(
+      group = interv,
+      x = median_tests,
+      y = median_cases_averted,
+      label = interv),
+    size = 3,
+    alpha = 0.7
+  ) +
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), legend.position = 'none',
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + 
+  geom_hline(yintercept = 0, color = 'red', linetype='dashed', alpha=0.8) + 
+  ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'in San Francisco')
+
+ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_num_tests_sf.png'), width=unit(14, 'in'), height=unit(10,'in'), dpi=300)
+
+
+empirical_interventions <- c('remove_ltfu_10pct', 'remove_ltfu_20pct', 'remove_f_msm_10pct_and_msw_20pct_ltfu', '1year_high_activity_semi_annual')
+
+ba_sf_cases_averted_by_additional_tests <- ggplot(filter(intervention_results, ! interv %in% empirical_interventions), aes(x=additional_tests, y=cases_averted, color = interv)) + 
+  geom_point(alpha=0.5) +
+  ggrepel::geom_label_repel(
+    data = filter(ir_summary, ! interv %in% empirical_interventions),
+    mapping = aes(
+      group = interv,
+      x = median_tests,
+      y = median_cases_averted,
+      label = interv),
+    size = 3,
+    alpha = 0.7
+  ) +
+  facet_wrap(~site) + 
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), legend.position = 'none',
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + 
+  geom_hline(yintercept = 0, color = 'red', linetype='dashed', alpha=0.8) + 
+  ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'Relative to Base Case')
+
+ggsave(ba_sf_cases_averted_by_additional_tests, file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_additional_tests.png'), width=unit(14, 'in'), height=unit(10,'in'), dpi=300)
+
+
+ggplot(filter(intervention_results, interv %in% empirical_interventions), aes(x=additional_tests, y=cases_averted, color = interv)) + 
+  geom_point(alpha=0.5) +
+  ggrepel::geom_label_repel(
+    data = filter(ir_summary, interv %in% empirical_interventions),
+    mapping = aes(
+      group = interv,
+      x = median_tests,
+      y = median_cases_averted,
+      label = interv),
+    size = 3,
+    alpha = 0.7
+  ) +
+  facet_wrap(~site) + 
+  theme_bw() + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), legend.position = 'none',
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) + 
+  geom_hline(yintercept = 0, color = 'red', linetype='dashed', alpha=0.8) + 
+  ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'Relative to Base Case')
+
+ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_additional_tests_empirical.png'), width=unit(14, 'in'), height=unit(10,'in'), dpi=300)
+
+
+# 
+#   ggplot(
+#   filter(intervention_results,!interv %in% empirical_interventions),
+#   aes(x = additional_tests, y = cases_averted, color = interv)
+#   ) +
+#   # geom_point(alpha=0.5) +
+#   facet_wrap(~site) + 
+#   geom_hline(
+#     yintercept = 0,
+#     color = 'red',
+#     linetype = 'dashed',
+#     alpha = 0.8
+#     ) +
+#     ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'Relative to Base Case') +
+#   geom_density_2d(alpha=0.7) + 
+#   ggrepel::geom_label_repel(
+#     data = filter(ir_summary, ! interv %in% empirical_interventions),
+#     mapping = aes(
+#       group = interv,
+#       x = median_tests,
+#       y = median_cases_averted,
+#       label = interv),
+#     size = 3
+#   ) + 
+#   theme_bw() + 
+#   theme(
+#     panel.border = element_blank(),
+#     panel.grid.major = element_blank(),
+#     legend.position = 'none',
+#     panel.grid.minor = element_blank(),
+#     axis.line = element_line(colour = "black")
+#     ) 
+# 
+# ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_additional_tests_contours.png'), width=unit(14, 'in'), height=unit(10,'in'), dpi=300)
+# 
+# 
+#   ggplot(
+#   filter(intervention_results,!interv %in% empirical_interventions),
+#   aes(x = additional_tests, y = cases_averted, color = interv)
+#   ) +
+#   # geom_point(alpha=0.5) +
+#   facet_wrap(site~interv) + 
+#   geom_hline(
+#     yintercept = 0,
+#     color = 'red',
+#     linetype = 'dashed',
+#     alpha = 0.8
+#     ) +
+#     ggtitle("Cases Averted Compared to Number of Additional Tests", subtitle = 'Relative to Base Case') +
+#   geom_density_2d(alpha=0.7) + 
+#   theme_bw() + 
+#   theme(
+#     panel.border = element_blank(),
+#     panel.grid.major = element_blank(),
+#     legend.position = 'none',
+#     panel.grid.minor = element_blank(),
+#     axis.line = element_line(colour = "black")
+#     ) 
+# 
+# ggsave(file.path(system.file("intervention_simulations", package = 'gcRegional'), 'cases_averted_by_additional_tests_contours_by_interv.png'), width=unit(14, 'in'), height=unit(20,'in'), dpi=300)
+
+```
+
+
+
+```{r calculate prevalence}
+results <- list()
+for (site in c("SF", "BA")) {
+  df <- switch(site, BA = interventions_ba, SF = interventions_sf)
+  df <- filter(df, variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'), population %in% c('Male', 'Female'))
+for (interv in c(interventions, 'base_case')) { 
+  interv_df <- filter(df, interv == interv)
+for (sim in unique(interv_df[['sim']])) {
+  sim_df <- filter(interv_df, sim == sim)
+for (year in unique(sim_df[['year']])) {
+  year_df <- filter(sim_df, year == year)
+  
+  # (male + female) (symptomatic + asymptomatic cases) / (male popsize + female popsize)
+  male_symptomatic <- filter(year_df, population == 'Male', variable == 'symptomatic_cases')[['value']]
+  female_symptomatic <-filter(year_df, population == 'Female', variable == 'symptomatic_cases')[['value']] 
+  male_asymptomatic <- filter(year_df, population == 'Male', variable == 'asymptomatic_cases')[['value']]
+  female_asymptomatic <-filter(year_df, population == 'Female', variable == 'asymptomatic_cases')[['value']] 
+  
+  male_popsize <-  filter(year_df, population == 'Male', variable == 'population_size')[['value']]
+  female_popsize <-filter(year_df, population == 'Female', variable == 'population_size')[['value']] 
+  
+  prevalence <- (male_symptomatic + male_asymptomatic + female_symptomatic + female_asymptomatic) / (male_popsize + female_popsize)
+
+  results[[length(results)+1]] <- 
+    c( sim = sim,
+       site = site,
+       interv = interv,
+       year = year,
+       prevalence = prevalence
+    )
+}
+} 
+}
+}
+
+# next step: summarize -- and make sure that the years 
+```
+
+
+```{r calculate prevalence with dplyr}
+df <- do.call(
+  rbind, 
+  list(
+    cbind.data.frame(site = 'BA', filter(interventions_ba, variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'), population %in% c('Male', 'Female'))),
+    cbind.data.frame(site = 'SF', filter(interventions_sf, variable %in% c('population_size', 'asymptomatic_cases', 'symptomatic_cases'), population %in% c('Male', 'Female')))
+  ))
+
+df <- reshape2::dcast(df, site + sim + interv + year ~ variable + population, value.var = 'value')
+
+summary_df <- group_by(df, site, sim, interv, year) %>% 
+  summarize(
+    prevalence = (
+    symptomatic_cases_Male + symptomatic_cases_Female + 
+      asymptomatic_cases_Male + asymptomatic_cases_Female
+    ) / (population_size_Male + population_size_Female)
+    )
+
+ci_df <- group_by(summary_df, site, interv, year) %>% 
+  summarise(mean = mean(prevalence, na.rm=T),
+            ci_high = quantile(prevalence, 0.975, na.rm = T),
+            ci_low = quantile(prevalence, 0.025, na.rm = T))
+
+library(ggplot2)
+
+ci_df$interv <- sapply(ci_df$interv, function(str) paste0(strwrap(gsub("_", " ", str), width = 15), collapse='\n'))
+
+ggplot(ci_df, aes(x = year, y = mean, ymax = ci_high, ymin = ci_low, fill = interv, color = interv)) + 
+  geom_ribbon(size = 0, alpha=0.5) + 
+  geom_line() + 
+  facet_grid(site ~ interv) + 
+  theme(legend.position = 'none', axis.text.x = element_text(angle = 90)) + 
+  scale_x_continuous(breaks = seq(min(ci_df$year), max(ci_df$year), by = 4))
+
+ggsave(
+  file.path(
+  system.file("intervention_simulations", package = 'gcRegional'),
+  "intervention_prevalence_absolute.png"
+  ),
+  dpi = 300,
+  width = unit(14, 'in'),
+  height = unit(7, 'in')
+  )
+
+summary_df_dcast <- dcast(summary_df, site + sim + year ~ interv)
+
+library(magrittr)
+for (interv in interventions) {
+    summary_df_dcast[[interv]] = summary_df_dcast[[interv]] / summary_df_dcast[['base_case']]
+}
+
+summary_df_dcast %<>% select(-base_case)
+
+relative_summary_df <- melt(summary_df_dcast, id.vars = c('site', 'sim', 'year'), variable.name = 'interv', value.name = 'prevalence')
+
+relative_ci_df <- relative_summary_df %>%  
+  group_by(site, interv, year) %>% 
+  summarise(mean = mean(prevalence, na.rm = T), 
+            ci_high = quantile(prevalence, 0.975, na.rm = T),
+            iq_high = quantile(prevalence, 0.75, na.rm = T),
+            ci_low = quantile(prevalence, 0.025, na.rm = T),
+            iq_low = quantile(prevalence, 0.25, na.rm = T))
+  
+library(ggrepel)
+
+last_data_points <- as.data.frame(do.call(
+  rbind.data.frame,
+  list(
+    filter(relative_ci_df, site == 'BA', year == 2022),
+    filter(relative_ci_df, site == 'SF', year == 2021)
+  )))
+                            
+library(ggrepel)
+
+ggplot(filter(relative_ci_df, year >= 2015), aes(x = year, y = mean, color = interv)) + 
+  geom_ribbon(aes(ymax = ci_high, ymin = ci_low, fill = interv), alpha = 0.2, size = 0) + 
+  geom_line() + 
+  facet_wrap(~site) + 
+  scale_x_continuous(
+    breaks = seq(min(relative_ci_df$year), max(relative_ci_df$year), by = 1), 
+    limits = c(2015, 2024)) +
+  geom_label_repel(data = last_data_points, aes(x = year, y = mean, group = interv, label = interv), segment.color = 'black', segment.size = .5, segment.alpha = 0.5, nudge_x = 2.5, direction = 'y', size = 2) +
+  theme(legend.position = 'none')
+
+ggsave(file.path(
+  system.file("intervention_simulations", package = 'gcRegional'),
+  "intervention_prevalence_relative.png"
+  ),
+  dpi = 300,
+  width = unit(14, 'in'),
+  height = unit(7, 'in')
+  )
+
+
+ggplot(
+  last_data_points,
+  aes(
+  x = interv,
+  middle = mean,
+  ymax = ci_high,
+  ymin = ci_low,
+  upper = iq_high,
+  lower = iq_low,
+  fill = interv
+  ),
+  alpha = 0.5
+  ) + 
+  geom_boxplot(stat = 'identity') + 
+  facet_wrap(~site) + 
+  coord_flip() + 
+  theme_bw() + 
+  theme(legend.position = 'none') + 
+  ggtitle("Prevalence in Last Intervention Year Compared to Base Case")
+
+ggsave("~/Documents/gcRegional/output/10-29-18/intervention_analysis_plots/prevalence_ratio_in_last_year.png", height = unit(5, 'in'), width = unit(9, 'in'))
+
+
+```

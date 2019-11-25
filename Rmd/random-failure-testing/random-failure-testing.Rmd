@@ -1,0 +1,25 @@
+---
+title: Random Failure Testing
+author: Christian Testa
+output: html_document
+---
+
+Let's see if the gcRegional model is randomly failing... 
+
+```{r, cache=TRUE}
+devtools::load_all()
+load_start(c('BA', 'SF')[rbinom(1,2,.5)])
+theta <- gc_env$theta
+outcomes <- rep(NA, 100)
+for (iter in 1:100) { 
+  e <- create_gcSim_param_env(theta)
+  e <- run_gcSim_with_environment(e)
+  outcomes[[iter]] <- any(is.na(e$out.cpp$out))
+}
+```
+
+```{r, cache=TRUE}
+# fraction which contain NAs
+length(which(outcomes)) / length(outcomes)
+```
+

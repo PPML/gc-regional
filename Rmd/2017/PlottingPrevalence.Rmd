@@ -1,0 +1,150 @@
+---
+title: "Plotting Prevalence"
+author: "Christian Testa"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+    %\VignetteIndexEntry{Plotting Prevalence}
+    %\VignetteEngine{knitr::rmarkdown}
+    \usepackage[utf8]{inputenc}
+---
+
+This vignette is here to help standardize our procedure for plotting
+prevalence related outputs from model calibrations and simulations. This
+document serves as a template that can be saved separately and modified to work
+with different calibrations.
+
+First, let's specify some calibration data.
+```{r}
+library(gcRegional)
+site <- "SF"
+load_start(site)
+
+# Replace this calibration filepath when using different calibration outputs
+# (and update the site variable). Calibration outputs should be the output of the
+# gcRegional::my_mcmc method.
+calibration_filepath <-
+  system.file(package = "gcRegional",
+  "data",
+  "gc_regional_test_all_SF_2017-09-12 22:16:10")
+
+
+# Load the calibration file data
+x <- load(calibration_file)
+
+# Rename the calibration data to mcmc_test
+calibration <- get(x); rm(x)
+
+trace <- calibration$trace
+rm(calibration)
+
+# burnin
+burnin <- 100
+trace <- trace[burnin+1:nrow(trace), ]
+
+# sample
+sample_size <- 100
+trace <- dplyr::sample_n(trace, sample_size)
+
+```
+
+Inside the `prevalence_plotting.R` source code file, there two functions which
+generate prevalence data that we are interested in visualizing:
+`tidy_prevalence_by_demographic` and `tidy_prevalence_dfs_for_many_simulations`.
+
+See the documentation `?tidy_prevalence_by_demographic` and
+`?tidy_prevalence_dfs_for_many_simulations` for further explanation of what
+these functions do.
+
+At a high level, these functions provide an interface to run simulations based
+on calibration data and then tabulate the number of infected in specified
+subpopulations in those simulations.
+
+**Todo:** I think I should change the `relative` parameter to something like
+`mode` which can be specified as one of several options: `'numberinfected'`,
+`'percentoftotalinfections'`, or `'prevalenceinsubpopulation'`. At the moment, 
+`relative=F` corresponds to what I'm calling `'numberinfected'`, and 
+`relative=T` corresponds to `'percentoftotalinfections'`. 
+
+**Todo:** I also think that these functions need to be drawing from the 
+calibration *after* burn-in. However, at this point in time I don't think
+we've conclusively decided how long the burn-in period should be.
+
+## Number of Infected
+
+First, we will go through examples of plotting the numbers of infected 
+individuals in each subpopulation. 
+
+```{r}
+prevalence_dataframes <- tidy_prevalence_dfs_for_many_simulations(
+  trace_sample = trace,
+  ijkl_subset = c('i', 'j'),
+  relative = F
+)
+```
+
+Since the data generated above is in a list format, we either need to 
+average the dataframes together or merge them into one long dataframe
+to visualize their contents. 
+
+#### Merging and Visualizing Each Simulation
+```{r}
+prevalence_data_all <- do.call(rbind, prevalence_dataframes)
+g <- plot_faceted_prevalence(prevalence_dfs = prevalence_data_all,
+                             site = gc_env$site,
+                             relative = F)
+print(g)
+```
+
+The `plot_faceted_prevalence` function also has a scales parameter which
+is passed to the facet_wrap function so that we can see each population
+on separate y-axes if we'd like.
+```{r}
+g <- plot_faceted_prevalence(prevalence_dfs = prevalence_data_all,
+                             site = gc_env$site,
+                             scales = "free_y",
+                             relative = F)
+print(g)
+```
+
+#### Averaging and Visualizing Stacked Population Trends
+```{r}
+prevalence_data_avg <- average_tidy_prevalence_dfs(prevalence_dataframes)
+g <- plot_stacked_area_prevalence(avg_prevalence = prevalence_data_avg,
+                                  site = gc_env$site,
+                                  relative = F)
+print(g)
+```
+
+## Percent of Total Infections
+
+Now we will go through the same procedures but with slightly different
+arguments to produce plots which show the percentage of total infections
+that are experienced by each subpopulation in the simulated data.
+
+```{r}
+prevalence_dataframes <- tidy_prevalence_dfs_for_many_simulations(
+  trace_sample = trace,
+  ijkl_subset = c('i', 'j'),
+  relative = T
+)
+
+prevalence_data_all <- do.call(rbind, prevalence_dataframes)
+g <- plot_faceted_prevalence(prevalence_dfs = prevalence_data_all,
+                             site = gc_env$site,
+                             relative = T)
+print(g)
+
+prevalence_data_all <- do.call(rbind, prevalence_dataframes)
+g <- plot_faceted_prevalence(prevalence_dfs = prevalence_data_all,
+                             site = gc_env$site,
+                             relative = T,
+                             scales = "free_y")
+print(g)
+
+prevalence_data_avg <- average_tidy_prevalence_dfs(prevalence_dataframes)
+g <- plot_stacked_area_prevalence(avg_prevalence = prevalence_data_avg,
+                                  site = gc_env$site,
+                                  relative = T)
+print(g)
+```

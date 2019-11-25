@@ -1,0 +1,18 @@
+---
+title: Analysis Walkthrough
+---
+
+This document will walk users through the process of producing
+the results available in our manuscript. The steps for doing so 
+are:
+
+1. Calibrate the model (not described here)
+2. Simulate interventions
+3. Summarize intervention simulations
+
+In order to follow the instructions in this document, 
+the gcRegional project will need to be downloaded and 
+loaded using the `devtools::load_all` function. If you 
+have the gcRegional project open and the working directory 
+is set to the main gcRegional folder, you can use 
+`devtools::load_all(".")` to load the package.

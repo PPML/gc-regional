@@ -1,0 +1,1043 @@
+---
+title: Figures Documentation
+author: Christian Testa
+output: 
+    html_document:
+        toc: true
+---
+
+# Figures
+
+This document serves the purpose of showing where the figures available in the manuscript 
+are available in this package and git repository. Additionally this document outlines 
+the way in which each of these figures are produced using the `gcRegional` R package. 
+
+The figures will be listed here as follows: 
+
+- fig1 Fit to Diagnosis Rates
+- fig2 Intervention Prevalence Time Trends
+- fig3 Additional Tests and Infections Averted
+- fig4 Infections Averted in LTFU scenarios
+- calibration figures, BA and SF
+- supplement fig1 Breakdown of Modeled Incidence and Reported Diagnoses
+- supplement fig2 MSM Intervention Sensitivity Analysis
+
+```{r, echo=T, results='hide', warning=FALSE}
+devtools::load_all('.')
+```
+
+### fig1 Fit to Diagnosis Rates
+
+### fig2 Intervention Prevalence Time Trends
+
+```{r}
+# .render_interventions_df()
+# .render_intervention_prevalence_summary_df()
+plots <- plot_intervention_prevalence_time_trends(save=T)
+names(plots)
+plots[['main_strategies_interventions_prevalence']]
+
+# plots <- plot_intervention_prevalence_time_trends(bw=T, save=T)
+# names(plots)
+# plots[['main_strategies_interventions_prevalence']]
+```
+
+### fig3 Additional Tests and Infections Averted
+
+##### Part A) Baltimore
+
+```{r}
+plots <- plot_number_needed_to_treat(save=T)
+plots[['additional_tests_and_cases_averted_ba_hypothetical_all_activity']]
+```
+
+##### Part B) San Francisco
+
+```{r}
+plots[['additional_tests_and_cases_averted_sf_hypothetical_all_activity']]
+```
+
+### fig4 Infections Averted in LTFU scenarios
+
+```{r}
+plots[['cases_averted_ltfu']]
+```
+
+### supplement fig1 Breakdown of Modeled Incidence and Reported Diagnoses
+```{r}
+plot_comparison_of_model_incidence_and_diagnoses()
+```
+
+### supplement fig2 MSM Intervention Sensitivity Analysis
+
+```{r}
+plots <- plot_msm_interventions()
+plots[['ba']]
+plots[['sf']]
+```
+
+```{r}
+interventions_msm <- readRDS(file.path(
+  system.file(
+    'intervention_analysis/',
+    package = 'gcRegional'), 'interventions_msm.rds'))
+
+ba_last_year <- filter(interventions_msm, site == 'BA') %>% `[[`('year') %>% max()
+sf_last_year <- filter(interventions_msm, site == 'SF') %>% `[[`('year') %>% max()
+
+interventions_msm %<>% filter((site == 'BA' & year == ba_last_year) | (site == 'SF' & year == sf_last_year))
+
+interventions_msm %<>% mutate(
+  interv = as.character(interv) %>% 
+    recode(
+      `MSM_1.5` = '1.5',
+      `MSM_2.5` = '2.5',
+      `MSM_3` = '3',
+      `MSM_3.5` = '3.5',
+      `MSM_4.5` = '4.5',
+      `MSM_5` = '5',
+      `MSM_annual` = '1',
+      `MSM_quarter_annual` = '4',
+      `MSM_semi_annual` = '2')) %>% 
+  filter(interv != 'base_case')
+
+interventions_msm_mean <- interventions_msm %>% 
+  group_by(site, interv) %>% 
+  summarize(
+    mean_additional_tests = mean(additional_tests, na.rm=T),
+    mean_cases_averted = mean(cases_averted, na.rm=T))
+
+
+  make_plot <- function(site) { 
+    site1 <- enquo(site)
+
+    ggplot(filter(interventions_msm, site == !! site1, year == c(BA = ba_last_year, SF = sf_last_year)[[!! site]]), aes(x=additional_tests, y=cases_averted, color = interv)) + 
+      geom_point(alpha=0.25) + 
+      geom_point(data = filter(interventions_msm_mean, site == !! site1), mapping = aes(x = mean_additional_tests, y = mean_cases_averted, shape = 'Mean Outcomes by Intervention'), color = 'black') + 
+      theme_minimal() + 
+      labs(shape = 'Summary Statistics', x = 'Additional Tests', 
+           y = 'Incident Infections Averted Compared to the Base Case',
+           color = 'MSM Screening Frequency') +
+      scale_shape_manual(values = c(`Mean Outcomes by Intervention` = 1)) + 
+      scale_color_manual(values = scales::hue_pal()(n=length(unique(interventions_msm$interv))+1)[-1]) +
+      expand_limits(x=0) + 
+      scale_x_continuous(labels = function(x) format(x, scientific = FALSE)) + 
+      ggtitle("Outcomes at the End of 5 Years of MSM Focused Interventions",
+              subtitle = c(BA = "Baltimore", SF = "San Francisco")[[site]])
+  }
+
+  plots <- list()
+  plots[['BA']] <- make_plot('BA')
+  plots[['SF']] <- make_plot('SF')
+
+  plots[['BA']]
+  plots[['SF']]
+
+```
+
+### HR Targeting Sensitivity Analysis
+
+```{r}_hr_complete
+  interventions_df <- readRDS(
+    file.path(
+    system.file('intervention_analysis', package='gcRegional'),
+    'interventions.rds'))
+  
+  intervention_sensitivity_df_ba <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_BA.rds'))
+  
+  intervention_sensitivity_df_sf <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_SF.rds'))
+  
+  interventions_df %<>% filter(interv %in% c('base_case', '1year_high_activity_semi_annual'))
+  
+  intervention_sensitivity_df <- 
+    rbind.data.frame(
+      interventions_df,
+      cbind.data.frame(site = 'SF', intervention_sensitivity_df_sf),
+      cbind.data.frame(site = 'BA', intervention_sensitivity_df_ba))
+ 
+   intervention_sensitivity_df$year <- ifelse(intervention_sensitivity_df$year %% 1 < .25, intervention_sensitivity_df$year - intervention_sensitivity_df$year%%1, intervention_sensitivity_df$year)
+   intervention_sensitivity_df$site <- as.character(intervention_sensitivity_df$site)
+   intervention_sensitivity_df$interv <- as.character(intervention_sensitivity_df$interv)
+   intervention_sensitivity_df$population <- as.character(intervention_sensitivity_df$population)
+  
+  saveRDS(intervention_sensitivity_df, file.path(
+      system.file('intervention_analysis/', package='gcRegional'),
+      'mobile_outreach_sensitivity_intervention_df.rds'))
+ 
+
+intervention_sensitivity_df <- readRDS(file.path(
+     system.file('intervention_analysis/', package='gcRegional'),
+     'mobile_outreach_sensitivity_intervention_df.rds'))
+
+
+.render_intervention_prevalence_summary_df_mobile_sensitivity <- function() { 
+
+  df <- readRDS(system.file("intervention_analysis/mobile_outreach_sensitivity_intervention_df.rds", package='gcRegional'))
+
+  .construct_interventions_description_df()
+
+  int_prev_df <- df %>% 
+    select(
+      c(
+        "site",
+        "sim",
+        "interv",
+        "year",
+        "population",
+        "population_size",
+        "symptomatic_cases",
+        "asymptomatic_cases"
+        )) %>% 
+    filter(population == "All") %>% 
+    select(-population) %>% 
+    mutate(prevalence = (asymptomatic_cases + symptomatic_cases) / population_size) %>% 
+    select(-c(population_size, asymptomatic_cases, symptomatic_cases))
+
+  saveRDS(int_prev_df, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_sensitivity_df.rds'
+  ))
+
+  int_prev_ci_df <- group_by(int_prev_df, site, interv, year) %>% 
+    summarise(mean = mean(prevalence, na.rm=T),
+              ci_high = quantile(prevalence, 0.975, na.rm = T),
+              ci_low = quantile(prevalence, 0.025, na.rm = T))
+
+  last_int_prev_data_points <- as.data.frame(do.call(
+    rbind.data.frame,
+    list(
+      filter(int_prev_ci_df, site == 'BA', year == 2022),
+      filter(int_prev_ci_df, site == 'SF', year == 2021)
+    )))
+
+  int_prev_ci_df$site <-
+    sapply(as.character(int_prev_ci_df$site), function(x)
+    c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+  last_int_prev_data_points$site <-
+    sapply(as.character(last_int_prev_data_points$site), function(x)
+    c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+  int_prev_ci_df[int_prev_ci_df$site == 'San Francisco', 'year'] <- int_prev_ci_df[int_prev_ci_df$site == 'San Francisco', 'year'] - 2016
+  int_prev_ci_df[int_prev_ci_df$site == 'Baltimore', 'year'] <- int_prev_ci_df[int_prev_ci_df$site == 'Baltimore', 'year'] - 2017
+
+  int_prev_ci_df <- merge(int_prev_ci_df, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+
+  last_int_prev_data_points[last_int_prev_data_points$site == 'San Francisco', 'year'] <-
+    last_int_prev_data_points[last_int_prev_data_points$site == 'San Francisco', 'year'] - 2016
+  last_int_prev_data_points[last_int_prev_data_points$site == 'Baltimore', 'year'] <-
+    last_int_prev_data_points[last_int_prev_data_points$site == 'Baltimore', 'year'] - 2017
+
+  last_int_prev_data_points <- merge(last_int_prev_data_points, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+  last_int_prev_data_points$names <- ordered(last_int_prev_data_points$names, levels = rev(intervention_descriptions$names))
+
+  # write.csv(x = last_int_prev_data_points, file = file.path(
+  #   system.file(
+  #     package = 'gcRegional',
+  #     "intervention_analysis/data/"
+  #   ),
+  #   'prevalence_in_interventions_after_5_years.csv'
+  # ))
+
+  # write.csv(x = int_prev_ci_df, file = file.path(
+  #   system.file(
+  #     package = 'gcRegional',
+  #     "intervention_analysis/data/"
+  #   ),
+  #   'prevalence_in_interventions_in_all_years.csv'
+  # ))
+
+  saveRDS(last_int_prev_data_points, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'last_int_prev_data_points_mobile_sensitivity.rds'
+  ))
+
+  saveRDS(int_prev_ci_df, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_ci_df_mobile_sensitivity.rds'
+  ))
+}
+
+.render_intervention_prevalence_summary_df_mobile_sensitivity()
+
+
+#' Plot Time Trends of Prevalence in Interventions during the Intervention Time Period
+#' 
+#' 
+plot_intervention_prevalence_time_trends_mobile_sensitivity <- function(save=F) { 
+
+  require(ggrepel)
+  
+  .construct_interventions_description_df()
+
+  last_int_prev_data_points <- 
+  readRDS(file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'last_int_prev_data_points_mobile_sensitivity.rds'
+  ))
+
+  int_prev_ci_df <- readRDS(file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_ci_df_mobile_sensitivity.rds'
+  ))
+
+  make_interventions_prevalence_plot <- function(interventions_list) {
+    ggplot(
+      filter(
+      int_prev_ci_df,
+      year >= 0,
+      year <= 5,
+      interv %in% interventions_list
+      ),
+      aes(x = year, y = 100 * mean, color = names)
+      ) +
+      geom_line() +
+    facet_wrap(~site) + 
+    scale_x_continuous(
+      breaks = seq(0, 5, by = 1), 
+      limits = c(0, 9)) +
+    geom_label_repel(
+      data = filter(last_int_prev_data_points, interv %in% interventions_list),
+      aes(
+      x = year,
+      y = 100*mean,
+      group = interv,
+      label = names,
+      # color = names,
+      fill = names
+      ),
+      color = 'black',
+      segment.color = 'black',
+      segment.size = 0.1,
+      segment.alpha = 0.8,
+      # fontface = 'bold',
+      alpha = 0.95,
+      nudge_x = 2.5,
+      direction = 'y',
+      size = 2.5
+      ) +
+    expand_limits(y = 0) + 
+    ylab("Prevalence (%)") +
+    xlab("Years After Intervention Start") + 
+    ggtitle("Prevalence Estimates During the Intervention Time Period") + 
+    theme_bw() + 
+    theme(legend.position = 'none') + 
+    scale_color_manual(values = setNames(intervention_descriptions$color, intervention_descriptions$names)) + 
+    scale_fill_manual(values = setNames(sapply(intervention_descriptions$color,
+                                               colorspace::lighten, amount=.85),
+                                        intervention_descriptions$names))
+  }
+
+  plots <- list()
+
+  hypothetical_ints_high_activity <- hypothetical_interventions[grepl("high", hypothetical_interventions)]
+
+  plots[['hypothetical_high_activity_interventions_prevalence']] <- make_interventions_prevalence_plot(c('base_case', '1year_high_activity_semi_annual',
+    '1year_high_activity_semi_annual_lower_capture_rate',
+    '1year_high_activity_semi_annual_complete_capture_rate'
+    ))
+
+  if (save) { 
+
+    ggsave(file.path(
+      system.file("intervention_analysis/figures/", package = 'gcRegional'),
+      'intervention_prevalence_current_strategies.png'
+      ),
+      height = unit(5, 'in'),
+      width = unit(9, 'in'),
+      plot = plots[['current_strategies_interventions_prevalence']])
+  } 
+
+  return(plots)
+}
+
+plots <- plot_intervention_prevalence_time_trends_mobile_sensitivity()
+
+plots[[1]]
+
+# ggsave("~/Desktop/figure.png", width=7, height=4)
+```
+
+
+### Compare 1year Mobile Outreach HR/LR Sensitivity Analysis Outcomes
+
+```{r}
+# last_ba_year <- filter(intervention_sensitivity_df, site == 'BA') %>% `[[`('year') %>% max
+# last_sf_year <- filter(intervention_sensitivity_df, site == 'SF') %>% `[[`('year') %>% max
+# 
+# 
+# int_s_df <- intervention_sensitivity_df %>% 
+#   filter(year == ifelse(site == 'SF', last_sf_year, last_ba_year), population == 'All') %>% 
+#   select(-year)
+# 
+# make_additional_tests_plot <- function(site) { 
+#   site1 <- site
+#   site <- enquo(site)
+#   ggplot(filter(int_s_df, site == !! site), aes(x = interv, group = sim, y = number_screened)) + 
+#     geom_jitter(alpha=0.6, color = '#FDC086') + 
+#     geom_boxplot(mapping = aes(group = interv), size = 1, alpha = 0.7, outlier.shape=NA) + 
+#     theme_minimal() + 
+#     coord_flip() + 
+#     ggtitle('Number of Screening Tests in the Mobile Outreach Testing Sensitivity Analysis',
+#     subtitle = c(SF = 'San Francisco', BA = 'Baltimore')[[site1]])
+# }
+# 
+# make_additional_tests_plot('SF')
+# 
+# 
+# make_add_tests_and_prevalent_infections_plot <- function(site) { 
+#   site1 <- site
+#   site <- enquo(site)
+#   ggplot(filter(int_s_df, site == !! site), 
+#          aes(x = number_screened, y = symptomatic_cases + asymptomatic_cases, color = interv)) + 
+#     geom_point(aes(group = sim), alpha = 0.3) + 
+#     geom_density_2d() + 
+#     theme_minimal() + 
+#     ggtitle('Additional Tests and Prevalent Infections', 
+#     subtitle = c(SF = 'San Francisco', BA = 'Baltimore')[[site1]])
+# }
+# 
+# make_add_tests_and_prevalent_infections_plot('SF')
+# 
+# library(plotly)
+# plotly::ggplotly()
+# 
+# 
+# make_prevalent_infections_and_incident_infections_plot <- function(site) { 
+#   site1 <- site
+#   site <- enquo(site)
+#   ggplot(filter(int_s_df, site == !! site), 
+#          aes(x = incident_cases, y = symptomatic_cases + asymptomatic_cases, color = interv)) + 
+#     geom_point(aes(group = sim), alpha = 0.3) + 
+#     geom_density_2d() + 
+#     theme_minimal() + 
+#     ggtitle('Incident Tests and Prevalent Infections', 
+#     subtitle = c(SF = 'San Francisco', BA = 'Baltimore')[[site1]])
+# }
+# 
+# make_prevalent_infections_and_incident_infections_plot('SF')
+# 
+# library(plotly)
+# plotly::ggplotly()
+```
+
+
+### Let's look at a few more breakdowns of HR, LR in the 1year intervention
+
+```{r}
+
+  # interventions_df <- readRDS(
+  #   file.path(
+  #   system.file('intervention_analysis', package='gcRegional'),
+  #   'interventions.rds'))
+  
+  intervention_sensitivity_df_ba <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_BA_fixed.rds'))
+  
+  intervention_sensitivity_df_sf <- readRDS(
+    file.path(
+    system.file('intervention_analysis/', package='gcRegional'),
+    'interventions_data_mobile_outreach_sensitivity_SF_fixed.rds'))
+  
+  # interventions_df %<>% filter(interv %in% c('base_case', '1year_high_activity_semi_annual'))
+  
+  intervention_sensitivity_df <- 
+    rbind.data.frame(
+      # interventions_df,
+      cbind.data.frame(site = 'SF', intervention_sensitivity_df_sf),
+      cbind.data.frame(site = 'BA', intervention_sensitivity_df_ba))
+
+   # Format Years properly 
+   intervention_sensitivity_df$year <- ifelse(intervention_sensitivity_df$year %% 1 < .25, intervention_sensitivity_df$year - intervention_sensitivity_df$year%%1, intervention_sensitivity_df$year)
+   intervention_sensitivity_df$site <- as.character(intervention_sensitivity_df$site)
+   intervention_sensitivity_df$interv <- as.character(intervention_sensitivity_df$interv)
+   intervention_sensitivity_df$population <- as.character(intervention_sensitivity_df$population)
+  
+  saveRDS(intervention_sensitivity_df, file.path(
+      system.file('intervention_analysis/', package='gcRegional'),
+      'mobile_outreach_sensitivity_intervention_df3.rds'))
+ 
+
+# intervention_df_2 <- readRDS(file.path(
+#      system.file('intervention_analysis/', package='gcRegional'),
+#      'mobile_outreach_sensitivity_intervention_df3.rds'))
+
+
+.render_intervention_prevalence_summary_df_mobile_sensitivity2 <- function() { 
+
+  df <- readRDS(system.file("intervention_analysis/mobile_outreach_sensitivity_intervention_df3.rds", package='gcRegional'))
+
+  .construct_interventions_description_df()
+
+  int_prev_df <- df %>% 
+    select(
+      c(
+        "site",
+        "sim",
+        "interv",
+        "year",
+        "population",
+        "population_size",
+        "symptomatic_cases",
+        "asymptomatic_cases"
+        )) %>% 
+    filter(population == "All") %>% 
+    select(-population) %>% 
+    mutate(prevalence = (asymptomatic_cases + symptomatic_cases) / population_size) %>% 
+    select(-c(population_size, asymptomatic_cases, symptomatic_cases))
+
+  saveRDS(int_prev_df, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_sensitivity_df3.rds'
+  ))
+
+  int_prev_ci_df <- group_by(int_prev_df, site, interv, year) %>% 
+    summarise(mean = mean(prevalence, na.rm=T),
+              ci_high = quantile(prevalence, 0.975, na.rm = T),
+              ci_low = quantile(prevalence, 0.025, na.rm = T))
+
+  last_int_prev_data_points <- as.data.frame(do.call(
+    rbind.data.frame,
+    list(
+      filter(int_prev_ci_df, site == 'BA', year == 2022),
+      filter(int_prev_ci_df, site == 'SF', year == 2021)
+    )))
+
+  int_prev_ci_df$site <-
+    sapply(as.character(int_prev_ci_df$site), function(x)
+    c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+  last_int_prev_data_points$site <-
+    sapply(as.character(last_int_prev_data_points$site), function(x)
+    c(SF = 'San Francisco', BA = 'Baltimore')[[x]])
+
+  int_prev_ci_df[int_prev_ci_df$site == 'San Francisco', 'year'] <- int_prev_ci_df[int_prev_ci_df$site == 'San Francisco', 'year'] - 2016
+  int_prev_ci_df[int_prev_ci_df$site == 'Baltimore', 'year'] <- int_prev_ci_df[int_prev_ci_df$site == 'Baltimore', 'year'] - 2017
+
+  int_prev_ci_df <- merge(int_prev_ci_df, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+
+  last_int_prev_data_points[last_int_prev_data_points$site == 'San Francisco', 'year'] <-
+    last_int_prev_data_points[last_int_prev_data_points$site == 'San Francisco', 'year'] - 2016
+  last_int_prev_data_points[last_int_prev_data_points$site == 'Baltimore', 'year'] <-
+    last_int_prev_data_points[last_int_prev_data_points$site == 'Baltimore', 'year'] - 2017
+
+  last_int_prev_data_points <- merge(last_int_prev_data_points, intervention_descriptions, by.x = 'interv', by.y = 'shortnames', all.x = T)
+  # last_int_prev_data_points$names <- ordered(last_int_prev_data_points$names, levels = rev(intervention_descriptions$names))
+
+  # write.csv(x = last_int_prev_data_points, file = file.path(
+  #   system.file(
+  #     package = 'gcRegional',
+  #     "intervention_analysis/data/"
+  #   ),
+  #   'prevalence_in_interventions_after_5_years.csv'
+  # ))
+
+  # write.csv(x = int_prev_ci_df, file = file.path(
+  #   system.file(
+  #     package = 'gcRegional',
+  #     "intervention_analysis/data/"
+  #   ),
+  #   'prevalence_in_interventions_in_all_years.csv'
+  # ))
+
+  saveRDS(last_int_prev_data_points, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'last_int_prev_data_points_mobile_sensitivity3.rds'
+  ))
+
+  saveRDS(int_prev_ci_df, file = file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_ci_df_mobile_sensitivity3.rds'
+  ))
+}
+
+# .render_intervention_prevalence_summary_df_mobile_sensitivity2()
+
+
+plot_intervention_prevalence_time_trends_mobile_sensitivity2 <- function(save=F) { 
+
+  require(ggrepel)
+  
+  .construct_interventions_description_df()
+
+  last_int_prev_data_points <- 
+  readRDS(file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'last_int_prev_data_points_mobile_sensitivity3.rds'
+  ))
+
+  int_prev_ci_df <- readRDS(file.path(
+    system.file(
+      package = 'gcRegional',
+      "intervention_analysis/data/"
+    ),
+    'int_prev_ci_df_mobile_sensitivity3.rds'
+  ))
+
+  make_interventions_prevalence_plot <- function(interventions_list) {
+    ggplot(
+      filter(
+      int_prev_ci_df,
+      year >= 0,
+      year <= 5,
+      interv %in% interventions_list
+      ),
+      aes(x = year, y = 100 * mean, color = names)
+      ) +
+      geom_line() +
+    facet_wrap(~site) + 
+    scale_x_continuous(
+      breaks = seq(0, 5, by = 1), 
+      limits = c(0, 9)) +
+    geom_label_repel(
+      data = filter(last_int_prev_data_points, interv %in% interventions_list),
+      aes(
+      x = year,
+      y = 100*mean,
+      group = interv,
+      label = names,
+      # color = names,
+      fill = names
+      ),
+      color = 'black',
+      segment.color = 'black',
+      segment.size = 0.1,
+      segment.alpha = 0.8,
+      # fontface = 'bold',
+      alpha = 0.95,
+      nudge_x = 2.5,
+      direction = 'y',
+      size = 2.5
+      ) +
+    expand_limits(y = 0) + 
+    ylab("Prevalence (%)") +
+    xlab("Years After Intervention Start") + 
+    ggtitle("Prevalence Estimates During the Intervention Time Period") + 
+    theme_bw() + 
+    theme(legend.position = 'none') + 
+    scale_color_manual(values = setNames(intervention_descriptions$color, intervention_descriptions$names)) + 
+    scale_fill_manual(values = setNames(sapply(intervention_descriptions$color,
+                                               colorspace::lighten, amount=.85),
+                                        intervention_descriptions$names))
+  }
+
+  plots <- list()
+
+  hypothetical_ints_high_activity <- hypothetical_interventions[grepl("high", hypothetical_interventions)]
+
+  plots[['mobile_outreach_sensitivity_interventions']] <- make_interventions_prevalence_plot(c('base_case', 
+'1year_high_activity_semi_annual_2_10th_hr_pt133_lr',
+'1year_high_activity_semi_annual_4_10th_hr_pt111_lr',
+'1year_high_activity_semi_annual_5_10th_hr_pt1_lr'
+)
+    )
+
+  if (save) { 
+
+    ggsave(file.path(
+      system.file("intervention_analysis/figures/", package = 'gcRegional'),
+      'mobile_outreach_sensitivity_interventions.png'
+      ),
+      height = unit(5, 'in'),
+      width = unit(12, 'in'),
+      plot = plots[['mobile_outreach_sensitivity_interventions']])
+  } 
+
+  return(plots)
+}
+
+plots <- plot_intervention_prevalence_time_trends_mobile_sensitivity2(save=T)
+plots[[1]]
+```
+
+### Boxplots with Jitter
+
+```{r}
+# load_all()
+
+plots <- plot_number_needed_to_treat2(save=T)
+
+plots[[1]]
+
+```
+
+
+### Additional Tables
+
+Additional Tests, Incident Cases Averted for each Intervention
+similar to Table 2
+
+
+Mean with 95% CI of: 
+  - Relative Reduction in Prevalence,
+  - Relative Reduction in Cumulative Incident Infections, 
+  - Relative Number of Additional Tests
+
+By site and intervention
+
+```{r}
+# .render_intervention_summary_table <- function(site) { 
+  require(data.table)
+
+  df <- readRDS(system.file('intervention_analysis/interventions3.rds', package='gcRegional'))
+
+  max_sf_year <- df %>% filter(site == 'SF') %>% `[[`('year') %>% max
+  max_ba_year <- df %>% filter(site == 'BA') %>% `[[`('year') %>% max
+
+  df %<>% mutate(
+    year = ifelse(site == 'SF', year - max_sf_year + 5, year - max_ba_year + 5)) %>% 
+  filter(year %in% c(0,5))
+
+  df %<>% filter(population == 'All') 
+
+  df2 <- df %>% 
+    select(-population) %>% 
+    mutate(prevalent_infections = symptomatic_cases + asymptomatic_cases) %>% 
+    select(-c(symptomatic_cases, asymptomatic_cases)) %>% 
+    select(-diagnosed_cases)
+
+  basecase_df <- df2 %>% filter(interv == 'base_case') %>% select(-interv)
+
+  df3 <- merge(df2, basecase_df, by = c('site', 'sim', 'year'), suffixes = c('', '.basecase'))
+
+  df4 <- data.table::dcast(setDT(df3), site + sim + interv ~ year,
+    value.var =  colnames(df3)[5:ncol(df3)])
+
+
+   df5 <- 
+     df4 %>% 
+     mutate(
+       number_screened = number_screened_5,# - number_screened_0,
+       number_screened.basecase = number_screened.basecase_5,# - number_screened.basecase_0,
+       prevalent_infections = prevalent_infections_5,
+       prevalent_infections.basecase = prevalent_infections.basecase_5,
+       incident_cases = incident_cases_5,# - incident_cases_0,
+       incident_cases.basecase = incident_cases.basecase_5,# - incident_cases.basecase_0,
+       population_size = population_size_5) 
+
+  df5 <- df5 %>% 
+    select(grep("^[a-z\\\\._]*$", colnames(df5), value=T))
+
+  head(df5)
+
+  df6 <- df5 %>% 
+    mutate(
+      prevalence = prevalent_infections / population_size,
+      rr.incident_infections_averted = (incident_cases.basecase - incident_cases) / incident_cases.basecase,
+      rr.additional_tests = (number_screened - number_screened.basecase)/(number_screened.basecase)) %>% 
+  select(site, sim, interv, prevalence, rr.incident_infections_averted, rr.additional_tests)
+
+  df6 <- df6 %>% 
+    reshape2::melt(id.vars = c('site', 'sim', 'interv'))
+
+  df7 <- df6 %>% 
+    group_by(site, interv, variable) %>% 
+    summarize(ci_high = quantile(value, 0.975, na.rm=T),
+              median = median(value, na.rm=T),
+              mean = mean(value, na.rm=T),
+              ci_low = quantile(value, 0.025, na.rm=T))
+
+  df8 <- df7 %>% 
+    ungroup() %>% 
+    setDT() %>% 
+    data.table::dcast(site + interv ~ variable, value.var = c('ci_high', 'mean', 'median', 'ci_low'))
+
+  percent <- function(x, digits = 2, format = "f", ...) {
+    paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+  }
+
+  formatted_percents <- apply(df8[,3:ncol(df8)], 2, percent)
+
+  orig_ncol <- ncol(df8)
+  df8[,3:orig_ncol]  <- NULL
+  df9 <- cbind.data.frame(df8, formatted_percents)
+
+  .construct_interventions_description_df()
+
+  df10 <- merge(df9, intervention_descriptions[, c('shortnames', 'names')], by.x = 'interv', by.y = 'shortnames')
+
+  df11 <- as.data.frame(df10)[,c(2,ncol(df10),3:(ncol(df10)-1))]
+
+  df11 %<>% arrange(site)
+
+  write.csv(df11, file.path(
+      system.file("intervention_analysis/", package='gcRegional'),
+      'intervention_rr_prevalence_inf_averted_addt_tests.csv'))
+
+  df12 <- df11 %>% 
+    mutate(
+      prevalence = paste0("Mean: ", mean_prevalence, 
+                          " Median: ", median_prevalence,
+                          " (", ci_low_prevalence, ", ", ci_high_prevalence, ")"),
+      rr.incident_infections_averted = 
+        paste0("Mean: ", mean_rr.incident_infections_averted, 
+               " Median: ", median_rr.incident_infections_averted, 
+               " (", ci_low_rr.incident_infections_averted, ", ", ci_high_rr.incident_infections_averted, ")"),
+      rr.additional_tests = 
+        paste0("Mean: ", mean_rr.additional_tests, 
+               " Median: ", median_rr.additional_tests, 
+               " (", ci_low_rr.additional_tests, ", ", ci_high_rr.additional_tests, ")")) %>% 
+    select(c('site', 'names', 'prevalence', 'rr.incident_infections_averted', 'rr.additional_tests'))
+
+  write.csv(df12, file.path(
+      system.file("intervention_analysis/", package='gcRegional'),
+      'intervention_rr_prevalence_inf_averted_addt_tests_formatted.csv'), row.names=FALSE)
+}
+# .render_intervention_summary_table()
+```
+
+### NNT Table
+
+```{r}
+
+# nt_ca_df <- readRDS(file.path(
+#   system.file(
+#     package = 'gcRegional',
+#     "intervention_analysis/data/"
+#   ),
+#   'additional_tests_(pct)_cases_averted_(pct)_and_nnt3.rds'
+# ))
+# 
+# used_interventions <- readRDS(system.file("intervention_analysis/used_interven
+# tions.rds", package='gcRegional'))
+# 
+# main_interventions <- used_interventions[-grep("high_activity|ltfu", used_interventions)]
+# 
+# nt <- nt_ca_df %>% filter(variable == 'Number Needed to Test') %>% 
+#   filter(interv %in% c(main_interventions, '1year_high_activity_semi_annual')) %>% 
+#   select(site, names, mean, ci_high, ci_low) %>%
+#   arrange(site)
+# 
+# formatter <- function(x, digits = 1, format = "f", ...) {
+#   formatC(x, format = format, digits = digits, ...)
+# }
+# 
+# formatted_data <- apply(nt[,3:5], 2, formatter)
+# 
+# nt[,3:5] <- formatted_data
+# 
+# nt$nnt <- paste0(nt$mean, " (", nt$ci_low, ", ", nt$ci_high, ")")
+# 
+# nt <- nt[, c('site', 'names', 'nnt')]
+# 
+# write.csv(nt, "~/Desktop/nnt.csv")
+```
+
+
+### Produce Outcomes table for Mobile outreach Sensitivity Scenarios
+
+```{r}
+# .render_intervention_summary_table_mobile_outreach <- function(site) { 
+#   require(data.table)
+# 
+#   # df <- readRDS(system.file('intervention_analysis/interventions3.rds', package='gcRegional'))
+#   mobile_ba <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_BA_fixed.rds', package='gcRegional'))
+#   mobile_sf <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_SF_fixed.rds', package='gcRegional'))
+# 
+#   mobile_ba$site <- 'BA'
+#   mobile_sf$site <- 'SF'
+# 
+#   df <- rbind.data.frame(mobile_ba, mobile_sf)
+# 
+# 
+#   max_sf_year <- df %>% filter(site == 'SF') %>% `[[`('year') %>% max
+#   max_ba_year <- df %>% filter(site == 'BA') %>% `[[`('year') %>% max
+# 
+#   df %<>% mutate(
+#     year = ifelse(site == 'SF', year - max_sf_year + 5, year - max_ba_year + 5)) %>% 
+#   filter(year %in% c(0,5))
+# 
+#   df %<>% filter(population == 'All') 
+# 
+#   df2 <- df %>% 
+#     select(-population) %>% 
+#     mutate(prevalent_infections = symptomatic_cases + asymptomatic_cases) %>% 
+#     select(-c(symptomatic_cases, asymptomatic_cases)) %>% 
+#     select(-diagnosed_cases)
+# 
+#   basecase_df <- df2 %>% filter(interv == 'base_case') %>% select(-interv)
+# 
+#   df3 <- merge(df2, basecase_df, by = c('site', 'sim', 'year'), suffixes = c('', '.basecase'))
+# 
+#   df4 <- data.table::dcast(setDT(df3), site + sim + interv ~ year,
+#     value.var =  colnames(df3)[5:ncol(df3)])
+# 
+# 
+#    df5 <- 
+#      df4 %>% 
+#      mutate(
+#        number_screened = number_screened_5,# - number_screened_0,
+#        number_screened.basecase = number_screened.basecase_5,# - number_screened.basecase_0,
+#        prevalent_infections = prevalent_infections_5,
+#        prevalent_infections.basecase = prevalent_infections.basecase_5,
+#        incident_cases = incident_cases_5,# - incident_cases_0,
+#        incident_cases.basecase = incident_cases.basecase_5,# - incident_cases.basecase_0,
+#        population_size = population_size_5) 
+# 
+#   df5 <- df5 %>% 
+#     select(grep("^[a-z\\\\._]*$", colnames(df5), value=T))
+# 
+#   head(df5)
+# 
+#   df6 <- df5 %>% 
+#     mutate(
+#       prevalence = prevalent_infections / population_size,
+#       rr.incident_infections_averted = (incident_cases.basecase - incident_cases) / incident_cases.basecase,
+#       rr.additional_tests = (number_screened - number_screened.basecase)/(number_screened.basecase)) %>% 
+#   select(site, sim, interv, prevalence, rr.incident_infections_averted, rr.additional_tests)
+# 
+#   df6 <- df6 %>% 
+#     reshape2::melt(id.vars = c('site', 'sim', 'interv'))
+# 
+#   saveRDS(df6, file.path(system.file("intervention_analysis/", package='gcRegional'),
+#       'intervention_rr_prevalence_inf_averted_addt_tests_mobile_outreach.rds'))
+# 
+# 
+#   df7 <- df6 %>% 
+#     group_by(site, interv, variable) %>% 
+#     summarize(ci_high = quantile(value, 0.975, na.rm=T),
+#               median = median(value, na.rm=T),
+#               mean = mean(value, na.rm=T),
+#               ci_low = quantile(value, 0.025, na.rm=T))
+# 
+#   df8 <- df7 %>% 
+#     ungroup() %>% 
+#     setDT() %>% 
+#     data.table::dcast(site + interv ~ variable, value.var = c('ci_high', 'mean', 'median', 'ci_low'))
+# 
+#   percent <- function(x, digits = 2, format = "f", ...) {
+#     paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+#   }
+# 
+#   formatted_percents <- apply(df8[,3:ncol(df8)], 2, percent)
+# 
+#   orig_ncol <- ncol(df8)
+#   df8[,3:orig_ncol]  <- NULL
+#   df9 <- cbind.data.frame(df8, formatted_percents)
+# 
+#   .construct_interventions_description_df()
+# 
+#   df10 <- merge(df9, intervention_descriptions[, c('shortnames', 'names')], by.x = 'interv', by.y = 'shortnames')
+# 
+#   df11 <- as.data.frame(df10)[,c(2,ncol(df10),3:(ncol(df10)-1))]
+# 
+#   df11 %<>% arrange(site)
+# 
+#   write.csv(df11, file.path(
+#       system.file("intervention_analysis/", package='gcRegional'),
+#       'intervention_rr_prevalence_inf_averted_addt_tests_mobile_outreach.csv'))
+# 
+#   df12 <- df11 %>% 
+#     mutate(
+#       prevalence = paste0("Mean: ", mean_prevalence, 
+#                           " Median: ", median_prevalence,
+#                           " (", ci_low_prevalence, ", ", ci_high_prevalence, ")"),
+#       rr.incident_infections_averted = 
+#         paste0("Mean: ", mean_rr.incident_infections_averted, 
+#                " Median: ", median_rr.incident_infections_averted, 
+#                " (", ci_low_rr.incident_infections_averted, ", ", ci_high_rr.incident_infections_averted, ")"),
+#       rr.additional_tests = 
+#         paste0("Mean: ", mean_rr.additional_tests, 
+#                " Median: ", median_rr.additional_tests, 
+#                " (", ci_low_rr.additional_tests, ", ", ci_high_rr.additional_tests, ")")) %>% 
+#     select(c('site', 'names', 'prevalence', 'rr.incident_infections_averted', 'rr.additional_tests'))
+# 
+#   write.csv(df12, file.path(
+#       system.file("intervention_analysis/", package='gcRegional'),
+#       'intervention_rr_prevalence_inf_averted_addt_tests_formatted_mobile_outreach.csv'), row.names=FALSE)
+# }
+# .render_intervention_summary_table_mobile_outreach()
+```
+
+# Plot Additional Tests and Incident Infections Averted
+
+```{r}
+# 
+#   make_additional_tests_and_cases_averted_mobile_outreach_plot <- function(
+#     city = c("Baltimore", "San Francisco")[rbinom(1,1,.5)+1], 
+#     interventions_list = hypothetical_interventions, 
+#     subtitle = NULL, 
+#     include_nnt = F) {
+# 
+#     require(rlang)
+#     city <- rlang::enquo(city)
+#     
+#     df <- readRDS(file.path(system.file("intervention_analysis/", package='gcRegional'),
+#       'intervention_rr_prevalence_inf_averted_addt_tests_mobile_outreach.rds'))
+# 
+#     df$variable %<>% recode(rr.additional_tests = 'Additional Tests (%)'
+# 
+# 
+#     df <- dplyr::filter(nnt_df, 
+#                   site == !! c(`Baltimore` = 'BA', `San Francisco`='SF')[[quo_name(city)]], 
+#                   interv %in% interventions_list)
+# 
+#     # df <- reshape2::melt(df, id.vars = c('site', 'sim', 'interv'))
+#     
+#     ggplot(df, aes(x=names, y = value*100)) + 
+#     geom_hline(data = data.frame(variable = c('Additional Tests (%)', 'Infections Averted (%)'), yintercept = c(NA, 0)), 
+#                mapping = aes(yintercept=yintercept), color='red', alpha=0.5) + 
+#     geom_jitter(
+#     data = df %>% filter(
+#       sim %in% sample.int(n=1000, size=250)),
+#     mapping = aes(color = names), width = 0.25, alpha = 0.5) + 
+#     geom_boxplot(
+#       width = .5, 
+#       outlier.shape = NA, 
+#       alpha = 0.5
+#       ) + 
+#     ggtitle(paste0(c(`Baltimore` = 'A) ', `San Francisco` = 'B) ')[[rlang::quo_name(city)]], "Intervention Outcomes in ", rlang::quo_name(city))) + 
+#     theme_bw() + 
+#     facet_wrap(~variable, scales = 'free_x') + 
+#     coord_flip()  +
+#     xlab("") + 
+#     expand_limits(y=0) + 
+#     theme(axis.title.x = element_text(hjust = 1), legend.position = 'none', 
+#           axis.text.x = element_text(hjust=.5),
+#           panel.grid.major.y = element_blank(),
+#           panel.grid.minor.y = element_blank(),
+#           plot.margin = margin(10, 15, 10, 10)) + 
+#     ylab("Additional Tests and Infections Averted as a Percentage of the Base Case") + 
+#     scale_color_manual(values = setNames(
+#       sapply(
+#       intervention_descriptions$color, colorspace::lighten, .5),
+#       intervention_descriptions$names
+#     ))
+#   }
+```
+

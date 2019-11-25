@@ -1,0 +1,140 @@
+
+--- 
+title: "Simulating Interventions"
+author: "Christian Testa"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+    %\VignetteIndexEntry{Simulating Interventions}
+    %\VignetteEngine{knitr::rmarkdown}
+    \usepackage[utf8]{inputenc}
+---
+
+So first we need to improve the `tidy_prevalence_by_demographic` function.
+I think I should just write an entirely new function which does what I want
+for the moment, before overwriting what's in the package.
+
+The function needs to be able to:
+- Specify specific demographic groups, not just based on demographic/categorical combinations
+- Calculate the denominator values of the selected population.
+
+```{r}
+library(gcRegional)
+
+for (site in c("BA", "SF")) {
+
+  load_start(site)
+
+  theta <- gc_env$theta
+
+  gc_env$model.end <- gc_env$model.end + 5
+  gc_env$cal.end <- gc_env$cal.end + 5
+
+  library(magrittr)
+  library(dplyr)
+  
+  calibration_file <-
+    system.file("data", package = 'gcRegional') %>%
+    list.files(full.names = T) %>%
+    grep(site, ., value=T) %>%
+    last
+  
+  # Load the calibration file data
+  x <- load(calibration_file)
+
+  # Rename the calibration data to mcmc_test
+  calibration <- get(x); rm(x)
+
+  trace <- calibration$trace
+  rm(calibration)
+
+  # burnin
+  burnin <- 100
+  trace <- trace[burnin+1:nrow(trace), ]
+
+  # sample
+  sample_size <- 100
+  trace <- as.data.frame(dplyr::sample_n(trace, sample_size))
+
+
+  avg_interv_prevalence_dfs <- lapply(
+    c("1", "2b", "2a", "3a", "4a", "5a", "6a", "7", "8", "9"),
+    # c("1", "2", "3", "4", "5", "6", "7", "8", "9"),
+    function(interv) {
+    tidy_prevalence_dfs_for_many_simulations(
+      trace_sample = trace,
+      ijkl_subset = c('l', 'j', 'i'), # excluding k because that's the "Low/High" risk group
+      relative = F,
+      years = 2010:2021,
+      interv = interv
+    ) %>%
+      average_tidy_prevalence_dfs()
+  })
+
+  for (i in 1:length(avg_interv_prevalence_dfs)) {
+    avg_interv_prevalence_dfs[[i]] <- cbind(interv=i, avg_interv_prevalence_dfs[[i]])
+  }
+
+  avg_interv_prevalence_dfs <- do.call(rbind, avg_interv_prevalence_dfs)
+
+  avg_prevalence <- avg_interv_prevalence_dfs
+
+  years <- 2010:2021
+
+  relative <- F
+
+  avg_prevalence$year <- years
+
+  library(ggplot2)
+
+  interv_names <- list(
+    "Base Case",
+    "Focused Young - Annual Screening",
+    "Focused Young - Semi-Annual Screening",
+    "Focused Young - Quarter-Annual Screening",
+    "All High Risk - Annual Screening",
+    "Focused MSM - Semi-Annual Screening",
+    "Focused MSM - Quarter-Annual Screening",
+    "All MSM - Annual Screening",
+    "All MSM - Semi-Annual Screening",
+    "All MSM - Quarter-Annual Screening"
+  )
+
+  avg_prevalence$interv <- sapply(avg_prevalence$interv, function(x) interv_names[[x]])
+
+  if (relative) (avg_prevalence$value <- avg_prevalence * 100)
+
+  p <- ggplot(avg_prevalence, aes(x = year, y = value, fill = demographic)) +
+    geom_area() + geom_line(position = 'stack',
+                            size = .2,
+                            color = 'black') +
+    ggtitle(
+      paste0(
+        "Comparison of Projected Number of Infected Individuals with Varying Screening Interventions in ",
+        switch(gc_env$site, SF = "San Francisco", BA = "Baltimore")
+      )
+    ) +
+    xlab("Year") +
+    ylab(
+      ifelse(
+        relative,
+        "Percentage (%) of Infected Population",
+        "Number (#) of Infected Individuals"
+      )
+    ) +
+    labs(fill = 'Subpopulation') +
+    facet_wrap( ~ interv) +
+    theme(
+      axis.text.x = element_text(angle = 90),
+      legend.position = 'bottom',
+      legend.text = element_text(size = 10)
+    )
+
+
+  print(p)
+
+  ggsave(filename = paste0("~/Desktop/intervention-prevalence-", site, ".png"), width=unit(10, 'in'), height=unit(8, 'in'))
+
+}
+
+```

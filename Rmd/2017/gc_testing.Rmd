@@ -1,0 +1,189 @@
+---
+title: Implementing Model Structure Variations
+---
+
+This document is a (working draft) explanation of the variations 
+to the gcRegional model which are implemented through a `gc_testing` parameter. 
+
+To calibrate the model using one of the following variations, one simply uses the 
+workflow
+
+```{r eval=F}
+library(gcRegional)
+gc_testing <- c('logistic_screening')
+calibrate_gcRegional(...)
+```
+
+## `use_national_posterior_means`
+
+To use the `national_posterior_means` variation of the model, 
+the `gc_testing` object should be a list which contains a 
+character vector called `national_posterior_means` which specifies
+the names of the values which should be taken from the means of 
+the national model's posterior distribution.
+
+For example, the first variation with fixing variables to the means
+of components in the national posterior distribution looked like this:
+```{r, eval=F}
+gc_testing <- list(use_national_posterior_means = c(
+  "log.rr.screen.m3",
+  "log.rr.screen.f3",
+  "log.rr.screen.ac",
+  "log.c.min.m.1",
+  "log.c.min.m.2",
+  "log.c.min.f.1",
+  "log.c.min.f.2",
+  "log.c.min.msm.1",
+  "log.c.min.msm.2",
+  "log.dur.inf.symp.m",
+  "log.dur.inf.symp.msm",
+  "log.dur.inf.symp.f",
+  "log.dur.inf.asymp.m",
+  "log.dur.inf.asymp.f",
+  "log.dur.inf.asymp.msm",
+  "logit.b.m",
+  "logit.b.f",
+  "logit.b.msm",
+  "logit.symp.m",
+  "logit.symp.f",
+  "logit.symp.msm" 
+))
+```
+
+Note that arbitrary subsets of the `theta` vector may be included in the 
+`use_national_posterior_means` character vector within the `gc_testing` 
+as long as they are elements of the `inst/extdata/national_posterior_means.rds` file
+inside the gcRegional package.
+
+## `logistic_screening`
+
+In order to implement `logistic_screening` as a variation which can be turned on 
+using `gc_testing` I've added the following code in various places within the gcRegional project. 
+
+#### a boolean test for if `logistic_screening` is on in `gc_testing.R`
+```{r eval=F}
+logistic_screening_variation <- function() {
+  if (exists('gc_testing', envir=.GlobalEnv) &&
+      'logistic_screening' %in% gc_testing) {
+    TRUE
+  } else FALSE
+}
+```
+
+#### add logistic growth parameters to the prior in `calibration.R`
+```{r eval=F}
+if (logistic_screening_variation()) {
+  screening_names <- c(
+    "m1.1", "m2.1", "m1", "m2", "m1", "m2", 'msm1', 'msm2', "f1.1", "f2.1", "f1", "f2", "f1", "f2")
+  for (scr_name in screening_names) {
+    theta[paste0('log.', scr_name, '.growth')] <- log(0.2)
+    sd.prior[length(sd.prior)+1] <- sqrt(2/9)
+  }
+  gc_env$screening_names <- screening_names
+  theta['log.rep.symp.growth'] <- log(0.2)
+  sd.prior[length(sd.prior)+1] <- sqrt(2/9)
+}
+```
+
+This adds terms like `theta['log.m1.1.growth']` to the `theta` parameter vector so that 
+each of the screening curves' logistic growth rate are individually controlled in calibration.
+
+This also adds a growth rate for the reporting probability for symptomatic cases.
+
+#### an optional term in the prior product expression in `prior.R`
+```{r eval=F}
+# rest of the prior * 
+( if (logistic_screening_variation()) {
+  prod(
+    dgamma(
+    x = sapply(gc_env$screening_names, function(x) {
+    exp(theta[paste0('log.', x, '.growth')])
+    })
+    ,shape = 2
+    ,rate = 3
+    )
+  ) *
+  dgamma(exp(theta['log.rep.symp.growth']), 2, 3)
+} else 1
+)
+```
+Note that this defaults to 1 if we aren't in the `logistic_screening_variation()`.
+
+This arbitrarily assumes that `shape1=2` and `shape2=5` are good prior parameters for 
+our logistic growth curves. 
+
+The growth parameter in principle is a positive valued number with no upper limit, so I wanted it to be
+able to go up to values around 2, and since a beta distribution is only valued on [0,1] I chose to use
+a gamma distribution.
+
+```{r echo=F}
+x=seq(0, 2, 0.001)
+df = data.frame(x=x, y=dgamma(x, 2, 3))
+library(ggplot2)
+print(ggplot(df, aes(x,y)) + geom_line() + geom_ribbon(aes(ymax=y, ymin=0), fill='steelblue1', alpha=0.4) + 
+        ggtitle("dgamma(x, 2, 3)"))
+```
+
+There is a small amount of reasoning behind this distribution: 
+If the growth rate is around 1 or greater then the distribution practically becomes a step function: 
+
+```{r echo=F}
+library(gcRegional)
+x = seq(0, 16, 0.1)
+y = logistic_growth(0.5, 0.8, 2, x)
+df = data.frame(x,y)
+print(ggplot(df, aes(x=x,y=y)) + 
+        geom_line() + 
+        xlab("years") + 
+        ggtitle("logistic growth from .5 to .8 with growth rate 2", subtitle = "almost a step function"))
+```
+
+And on the other hand if the growth rate is very close to 0, the function becomes practically linear.
+
+```{r echo=F}
+library(gcRegional)
+x = seq(0, 16, 0.1)
+y = logistic_growth(0.5, 0.8, .05, x)
+df = data.frame(x,y)
+print(ggplot(df, aes(x=x,y=y)) + 
+        geom_line() + 
+        xlab("years") + 
+        ggtitle("logistic growth from .5 to .8 with growth rate .05", subtitle = "almost linear"))
+```
+
+The standard deviation of the Gamma distribution with parameters α and β is 
+$\sigma = \sqrt{\text{Var}} = \sqrt{\alpha / \beta^2} = \sqrt{2/9}$. This justifies
+the terms added to `sd.prior` in the `calibration.R` file mentioned above.
+
+#### construct screening matrix in `model_pred_function.R`
+```{r eval=F}
+if (logistic_screening_variation()) {
+  screening <-
+    matrix(
+      sapply(gc_env$screening_names, function(x) {
+        c(ilogit(theta[paste0('logit.screen.', x, '.a')]),
+          ilogit(theta[paste0('logit.screen.', x, '.d')]),
+          exp(theta[paste0('log.', x, '.growth')])
+      )
+    }), ncol=3, byrow=T)
+  t_vec <-seq(0,1, length.out=(gc_env$cal.period+1))
+  screen_mat <- apply(screening, 1, function(x) logistic_growth(x[[1]], x[[2]], x[[3]], t_vec))
+}
+```
+
+#### construct reporting probability matrix in `model_pred_function.R`
+
+```{r eval=F}
+if (logistic_screening_variation()) {
+  t_vec <-seq(0,16, length.out=(gc_env$cal.period+1))
+  rep.trend <-
+    matrix(rep(c(
+      ilogit(theta['logit.rep.symp.a']), 
+      ilogit(theta['logit.rep.symp.d']), 
+      exp(theta['log.rep.symp.growth'])), 32), 
+      ncol = 3, byrow = T)
+  rep.trend <- apply(rep.trend, 1, function(x) {
+    logistic_growth(x[[1]], x[[2]], x[[3]], t_vec)
+    })
+}
+```

@@ -1,0 +1,37 @@
+Package: gcRegional
+Title: A Regional Model of Gonorrhea in San Francisco and Baltimore
+Version: 0.0.0.9000
+Authors@R: c(
+    person("Christian", "Testa", email = "ctesta@hsph.harvard.edu", role = c("aut", "cre")),
+    person("Ashleigh", "Tuite", email = "atuite@hsph.harvard.edu", role = c("aut")))
+Description: A deterministic compartmental model of gonorrhea in Baltimore and San Francisco.
+Depends:
+    R (>= 3.4.1),
+Imports:
+    Hmisc,
+    R.utils,
+    Rcpp,
+    RcppArmadillo,
+    bezier,
+    coda,
+    deSolve,
+    fitR,
+    ggplot2,
+    grid,
+    gridExtra,
+    lattice,
+    latticeExtra,
+    plyr,
+    reshape2,
+    scales,
+    tmvtnorm,
+    magrittr,
+    readxl,
+    dplyr
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 6.1.1
+LinkingTo: Rcpp, RcppArmadillo
+Suggests: testthat, knitr, rmarkdown
+VignetteBuilder: knitr
+License: ?

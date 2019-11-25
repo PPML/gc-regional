@@ -1,0 +1,114 @@
+
+
+Let's try a differential evolution MCMC method on the gcRegional project.
+
+
+```{r}
+# library(doParallel)
+library(foreach)
+
+differential_evolution <- function(
+  target = dLogPosterior,
+  theta,
+  sd,
+  niterations,
+  nchains,
+  n_before_de = 10,
+  c) {
+  
+  chains <- list()
+  for (i in seq_len(nchains)) {
+    chains[[i]] <- matrix(
+      data = NA, 
+      nrow = niterations, 
+      ncol = length(theta))
+    colnames(chains[[i]]) <- names(theta)
+    chains[[i]][1, ] <- theta
+  }
+  
+  state <- list()
+  current_density = target(theta)
+  for (i in seq_len(nchains)) {
+    state[[i]] <- list(
+      current.theta = theta,
+      current.density = current_density,
+      proposal.theta = NA,
+      proposal.density = NA,
+      acceptance.series = c()
+      )
+  }
+  
+  n <- length(theta)
+  
+  for (iter in 2:niterations) {
+    for (chain in seq_len(nchains)) {
+      
+      # set proposal theta
+      state[[chain]][['proposal.theta']] <- 
+        state[[chain]][['current.theta']] + 
+        rnorm(length(theta), mean = state[[chain]][['current.theta']], sd = sd)
+      
+      # if past n_before_de add a difference vector
+      if (iter > n_before_de) {
+        ij <- sample(x = setdiff(1:nchains, chain), size = 2)
+        difference_vec <- chains[[ij[[1]]]][iter-1, ] - chains[[ij[[2]]]][iter-1, ]
+        state[[chain]][['proposal.theta']] <- state[[chain]][['proposal.theta']] + c*difference_vec
+      }
+      
+      # calculate log target density probability of proposal
+      state[[chain]][['proposal.density']] <- target(state[[chain]][['proposal.theta']])
+      
+      # calculate log probability of acceptance
+      log.acceptance <- state[[chain]][['proposal.density']] - state[[chain]][['current.density']]
+      
+      # decide whether or not to accept
+      accept <- (log.acceptance > log(runif(1)))
+      
+      # if accepted update the state variables for that component
+      if (accept) {
+        state[[chain]][['current.theta']] <- state[[chain]][['proposal.theta']]
+        state[[chain]][['current.density']] <- state[[chain]][['proposal.density']]
+        cat('.')
+      } else cat('x')
+      
+      if (iter %% 80 == 0) cat('\n')
+     
+      # update the trace matrix 
+      chains[[chain]][iter, ] <- state[[chain]][['current.theta']] 
+      
+      # add acceptance to the chain's acceptance.series
+      state[[chain]][['acceptance.series']] <- c(
+        as.integer(accept),
+        state[[chain]][['acceptance.series']])
+    }
+  }
+  
+  return(list(
+    chains = chains,
+    acceptances = lapply(seq_len(nchains), function(chain) state[[chain]][['acceptance.series']])))
+}
+
+
+library(gcRegional)
+load_start("SF")
+
+differential_evolution(
+  target = dLogPosterior
+  ,theta = gc_env$theta
+  ,sd = gc_env$sd.prior/1000
+  ,niterations = 1000
+  ,nchains = 10
+  ,n_before_de = 10
+  ,c = .7
+)
+
+  # target = dLogPosterior
+  # theta = gc_env$theta
+  # sd = gc_env$sd.prior/1000
+  # niterations = 1000
+  # nchains = 10
+  # n_before_de = 10
+  # c = .7
+
+
+```

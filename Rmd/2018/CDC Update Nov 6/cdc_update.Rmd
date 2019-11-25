@@ -1,0 +1,39 @@
+---
+title: "Regional Gonorrhea Project Update"
+output:
+  word_document: default
+  html_document: default
+date: "December 3rd, 2018"
+---
+
+### Distributions of Cases, Prevalence, and Incidence
+
+![](distribution_of_cases.png)
+
+![](prevalence_relative_rates.png)
+
+![](incidence_relative_rates.png)
+
+
+
+### Prevalence Time Trends in Intervention Scenarios
+
+![](intervention_prevalence_current_strategies.png)
+
+![](intervention_prevalence_hypothetical.png)
+
+### Relative Reductions in Prevalence
+
+![](prevalence_ratio_in_last_year_empirical.png)
+
+![](prevalence_ratio_in_last_year_hypothetical.png)
+
+### Additional Tests and Cases Averted
+
+![](number_tested_and_cases_averted_baltimore_empirical.png)
+
+![](number_tested_and_cases_averted_sanfrancisco_empirical.png)
+
+![](number_tested_and_cases_averted_baltimore_hypothetical.png)
+
+![](number_tested_and_cases_averted_sanfrancisco_hypothetical.png)

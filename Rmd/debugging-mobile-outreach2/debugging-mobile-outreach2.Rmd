@@ -1,0 +1,63 @@
+---
+title: Debugging Mobile Outreach 2
+author: Christian Testa
+date: November 14, 2019
+output: 
+    html_document:
+      toc: true
+---
+
+So we re-simulated a bunch of the same stuff... 
+
+Let's check if the NAs appear in the same simulations or not. 
+
+### Read in Data
+
+```{r read in data}
+# load gcRegional
+devtools::load_all()
+
+# Print filenames so we can remember what the filenames are
+# list.files(system.file('intervention_analysis/', package='gcRegional'))
+
+# read in data
+ba_orig <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_BA2.rds', package='gcRegional'))
+sf_orig <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_SF2.rds', package='gcRegional'))
+ba_new <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_BA3.rds', package='gcRegional'))
+sf_new <- readRDS(system.file('intervention_analysis/interventions_data_mobile_outreach_sensitivity_SF3.rds', package='gcRegional'))
+
+# Add site column
+ba_orig$site <- 'BA'
+sf_orig$site <- 'SF'
+ba_new$site <- 'BA'
+sf_new$site <- 'SF'
+```
+
+### Check which are NA
+
+```{r locate NAs}
+lapply(list(ba_orig, sf_orig, ba_new, sf_new), colnames)
+lapply(list(ba_orig, sf_orig, ba_new, sf_new), head)
+
+locate_NAs <- function(df) { 
+  df %>% 
+    `[`(., apply(., 2, function(x) { any(is.na(x)) }), ) %>%  # filter for rows which contain NA
+    select(site, sim, interv) %>% 
+    unique()
+}
+
+NA_locations <- lapply(list(ba_orig, sf_orig, ba_new, sf_new), locate_NAs)
+```
+
+```{r print results}
+names(NA_locations)
+```
+
+```{r}
+sf_orig %>% 
+    `[`(., apply(., 2, function(x) { any(is.na(x)) }), ) %>%  # filter for rows which contain NA
+    select(site, sim, interv, year) %>% 
+    unique() -> sf_orig_NAs
+```
+
+

@@ -1,0 +1,69 @@
+---
+title: Check how many of the intervention simulations are NA
+output: html_document
+---
+
+```{r, cache=TRUE}
+devtools::load_all()
+
+interventions_df <- readRDS(
+  file.path(
+  system.file('intervention_analysis', package='gcRegional'),
+  'interventions.rds'))
+
+x <- length(which(is.na(interventions_df))) / prod(dim(interventions_df))
+
+na_fraction <- function(x) { 
+  length(which(is.na(x))) / prod(dim(x)) } 
+
+x_ba <- na_fraction(interventions_df %>% filter(site == 'BA'))
+x_sf <- na_fraction(interventions_df %>% filter(site == 'SF'))
+
+na_count <- function(x) { length(which(is.na(x))) } 
+
+n_ba <- na_count(interventions_df %>% filter(site == 'BA'))
+n_sf <- na_count(interventions_df %>% filter(site == 'SF'))
+
+
+write.csv(c(x, x_ba, x_sf, n_ba/6, n_sf/6), '~/Desktop/NA_ratio.csv')
+
+interventions_df %>% 
+  select(site, sim, interv, population_size) %>% 
+  `[`(., apply(., 1, function(x) any(is.na(x))),) %>% 
+  select(site, sim, interv) %>% 
+  unique -> unique_nas
+
+write.csv(unique_nas, "~/Desktop/NA_sims.csv")
+```
+
+Let's check if these fail locally...
+
+```{r}
+site <- "BA"
+load_start(site)
+
+trace <- switch(
+  site,
+  BA = as.data.frame(readRDS(system.file("calibration_outcomes/BA_posterior_sample.rds", package = "gcRegional"))$theta.list),
+  SF = as.data.frame(readRDS(system.file("calibration_outcomes/SF_posterior_sample.rds", package = "gcRegional"))$theta.list)
+)
+
+
+theta <- unlist(trace[unique_nas[[nrow(unique_nas)-1,'sim']], ])
+scenario <- unique_nas[[nrow(unique_nas)-1,'interv']]
+
+e <- create_gcSim_param_env(theta = theta, interv = scenario)
+e <- run_gcSim_with_environment(e)
+any(is.na(e$out.cpp$out))
+
+theta_mean <- apply(trace, 2, mean)
+theta_dist <- abs(theta_mean - theta_dist)
+trace_sd <- apply(trace, 2, sd)
+theta_dist_normalized <- theta_dist / trace_sd
+
+max(theta_dist_normalized)
+
+```
+
+
+
